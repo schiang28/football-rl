@@ -1,0 +1,2 @@
+episode_reward_mean = -5.49: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:29<00:00,  5.93s/it]/Users/sophiechiang/miniforge3/envs/vmas_fixed_env/lib/python3.11/site-packages/vmas/simulator/utils.py:325: UserWarning: Scenario kwargs: {'n_agents': 3, 'render_mode': 'rgb_array'} passed but not used by the scenario. This will turn into an error in future versions.
+  warnings.warn(

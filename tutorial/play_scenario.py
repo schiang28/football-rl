@@ -5,5 +5,5 @@ print("Starting Interactive Render (Press R to reset, keys to control)")
 render_interactively(
     scenario='football',
     n_blue_agents=2, # can change number of controlled agents
-    n_red_agets=2 # passed but not used by the scenario
+    ai_red_agents=2 # passed but not used by the scenario
 )
