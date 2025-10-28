@@ -1,4 +1,6 @@
 import torch
+import imageio, os
+from tqdm import tqdm
 
 from tensordict.nn import set_composite_lp_aggregate, TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
@@ -14,16 +16,10 @@ from torchrl.envs.libs.vmas import VmasEnv
 from torchrl.envs.utils import check_env_specs
 
 from torchrl.modules import MultiAgentMLP, ProbabilisticActor, TanhNormal
-
 from torchrl.objectives import ClipPPOLoss, ValueEstimators
+from torchrl.record.loggers.wandb import WandbLogger
 
 torch.manual_seed(0)
-from matplotlib import pyplot as plt
-from tqdm import tqdm
-
-import imageio
-from torchrl.record.loggers.wandb import WandbLogger
-import os
 
 
 # Devices
