@@ -1,5 +1,0 @@
-episode_reward_mean = 1.86: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:28<00:00,  5.98s/it]Traceback (most recent call last):
-  File "/Users/sophiechiang/Programming/Dissertation-II/tutorial/mappo_vmas_demo.py", line 300, in <module>
-    logger.close()
-    ^^^^^^^^^^^^
-AttributeError: 'WandbLogger' object has no attribute 'close'

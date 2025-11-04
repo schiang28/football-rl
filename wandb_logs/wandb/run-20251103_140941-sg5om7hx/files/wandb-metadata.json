@@ -1,0 +1,37 @@
+{
+  "os":  "macOS-15.7.1-arm64-arm-64bit",
+  "python":  "CPython 3.11.14",
+  "startedAt":  "2025-11-03T14:09:41.124997Z",
+  "program":  "/Users/sophiechiang/Programming/Dissertation-II/tutorial/mappo_vmas_training.py",
+  "codePath":  "tutorial/mappo_vmas_training.py",
+  "codePathLocal":  "mappo_vmas_training.py",
+  "git":  {
+    "remote":  "https://github.com/schiang28/football-rl.git",
+    "commit":  "807a7cdf0d6136fa648ea7d285719b364ecf8b1e"
+  },
+  "email":  "sophieyoshi2014@gmail.com",
+  "root":  "./wandb_logs",
+  "host":  "Reginald-IV.local",
+  "executable":  "/Users/sophiechiang/miniforge3/envs/vmas_fixed_env/bin/python",
+  "cpu_count":  8,
+  "cpu_count_logical":  8,
+  "disk":  {
+    "/":  {
+      "total":  "245107195904",
+      "used":  "204197720064"
+    }
+  },
+  "memory":  {
+    "total":  "8589934592"
+  },
+  "apple":  {
+    "name":  "Apple M1",
+    "ecpuCores":  4,
+    "pcpuCores":  4,
+    "gpuCores":  7,
+    "memoryGb":  8,
+    "swapTotalBytes":  "6442450944",
+    "ramTotalBytes":  "8589934592"
+  },
+  "writerId":  "42rrh3nme6mduuapr1lopv4rykd9bu7j"
+}
