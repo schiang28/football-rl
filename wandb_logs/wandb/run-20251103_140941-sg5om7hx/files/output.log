@@ -1,5 +1,0 @@
-episode_reward_mean = -5.78: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████| 50/50 [06:18<00:00,  7.57s/it]
-policy saved to ./saved_policies/mappo_football_251103_140939_policy.pt
-/Users/sophiechiang/miniforge3/envs/vmas_fixed_env/lib/python3.11/site-packages/vmas/simulator/utils.py:325: UserWarning: Scenario kwargs: {'n_agents': 3, 'render_mode': 'rgb_array'} passed but not used by the scenario. This will turn into an error in future versions.
-  warnings.warn(
-rollout gif saved to ./rollout_videos/mappo_football_251103_140939_rollout.gif
