@@ -3,6 +3,7 @@ import imageio, os
 from tqdm import tqdm
 import datetime
 import time
+import numpy as np
 
 from tensordict.nn import set_composite_lp_aggregate, TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
@@ -15,23 +16,25 @@ from torchrl.data.replay_buffers.storages import LazyTensorStorage
 
 from torchrl.envs import RewardSum, TransformedEnv
 from torchrl.envs.libs.vmas import VmasEnv
-from torchrl.envs.utils import check_env_specs
+from torchrl.envs.utils import check_env_specs, ExplorationType, set_exploration_type
 
 from torchrl.modules import MultiAgentMLP, ProbabilisticActor, TanhNormal
 from torchrl.objectives import ClipPPOLoss, ValueEstimators
 from torchrl.record.loggers.wandb import WandbLogger
+import wandb
 
 
 class MAPPOConfig:
-    scenario_name = "football"
+    scenario_name = "balance"
     n_agents = 3
-    max_steps = 100 # max no. timesteps per episode
-    n_iters = 10  # no. of training iterations
-    frames_per_batch = 6_000  # total timesteps across episodes in one batch per iteration
+    max_steps = 50 # max no. timesteps per episode
+    n_iters = 100 # no. of training iterations
+    frames_per_batch = 2_000  # total timesteps across episodes in one batch per iteration
+    num_vmas_envs = frames_per_batch // max_steps
 
-    num_epochs = 30  # no. of optimisation steps per training iteration
-    minibatch_size = 400  # no. samples processed per optimisation step
-    lr = 3e-4
+    num_epochs = 10  # no. of optimisation steps per training iteration
+    minibatch_size = 256  # no. samples processed per optimisation step
+    lr = 5e-4
     max_grad_norm = 1.0  # maximum norm for the gradients
     clip_epsilon = 0.2  # clip value for PPO loss
     entropy_eps = 1e-4
@@ -44,6 +47,10 @@ class MAPPOConfig:
     mappo = True
     share_parameters_policy = True
     share_parameters_critic = True
+
+    evaluation_interval = 5
+    evaluation_eps = 2
+    explore = False
 
 
 def setup_environment():
@@ -59,11 +66,9 @@ def setup_environment():
 
 def make_env(config, vmas_device, show_specs, show_keys):
     """Creates VMAS enviroment and applies transformations."""
-    num_vmas_envs = config.frames_per_batch // config.max_steps
-
     env = VmasEnv(
         scenario=config.scenario_name,
-        num_envs=num_vmas_envs,
+        num_envs=config.num_vmas_envs,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=vmas_device,
@@ -81,7 +86,7 @@ def make_env(config, vmas_device, show_specs, show_keys):
         print("reward_keys:", env.reward_keys)
         print("done_keys:", env.done_keys)
 
-    agent_key = "agent_blue"
+    agent_key = env.action_keys[0][0] # or "agents" or "agent_blue"
     env = TransformedEnv(env, RewardSum(in_keys=[env.reward_key], out_keys=[(agent_key, "episode_reward")]))
     check_env_specs(env)
     
@@ -170,6 +175,7 @@ def create_collector(config, env, policy, vmas_device, device, total_frames):
 
     return collector
 
+
 def create_loss(config, env, policy, critic, agent_key):
     """Creates loss modules."""
     loss_module = ClipPPOLoss(
@@ -194,11 +200,12 @@ def create_loss(config, env, policy, critic, agent_key):
 def setup_loggers(config, use_wandb):
     """Setup tqdm logger and WanDB logger if used."""
     if use_wandb:
-        logger = WandbLogger(exp_name=f"mappo_{config.scenario_name}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
+        timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
     else:
         class DummyLogger:
-            def log_scalar(self, name, value, step):
-                pass
+            def log_scalar(self, name, value, step): pass
+            def log(self, value, commit): pass
         logger = DummyLogger()  
 
     pbar = tqdm(total=config.n_iters, desc="episode_reward_mean = 0")
@@ -206,43 +213,112 @@ def setup_loggers(config, use_wandb):
     return logger, pbar
 
 
-def log_metrics(logger, pbar, done, tensordict_data, log_iteration, agent_key, log_info_dict, training_tds, training_time):
+def rendering_callback(env, td):
+    env.frames.append(env.render(mode="rgb_array", visualize_when_rgb=False))
+
+
+def log_metrics(logger, pbar, done, current_tds, step, agent_key, training_tds, training_time, total_time, total_frames_collected, iteration_time, frames_per_batch):
     """Log relevant metrics in wandDB and to the terminal."""
-    reward = tensordict_data.get(("next", agent_key, "reward"))
+    reward = current_tds.get(("next", agent_key, "reward"))
 
-    reward_mean = reward.mean().item()
-    reward_max = reward.max().item()
-    reward_min = reward.min().item()
+    # log training and learner metrics
+    log_reward_dict = {
+        "reward_mean": reward.mean().item(),
+        "reward_max": reward.max().item(),
+        "reward_min":reward.min().item(),
+    }
 
-    logger.log_scalar(name="train/reward/reward_mean", value=reward_mean, step=log_iteration)
-    logger.log_scalar(name="train/reward/reward_max", value=reward_max, step=log_iteration)
-    logger.log_scalar(name="train/reward/reward_min", value=reward_min, step=log_iteration)
-    logger.log_scalar(name="train/training_time", value=training_time, step=log_iteration)
+    for key, val in log_reward_dict.items():
+        logger.log_scalar(name=f"train/reward/{key}", value=val, step=step)
+    logger.log_scalar(name="train/training_time", value=training_time, step=step)
 
     for key, val in training_tds.items():
-        logger.log_scalar(name=f"train/learner/{key}", value=val.mean().item(), step=log_iteration)
+        logger.log_scalar(name=f"train/learner/{key}", value=val.mean().item(), step=step)
 
-    logger.log_scalar(name="info/training_iteration", value=log_iteration, step=log_iteration)
+    # log information metrics
+    log_info_dict = {
+        'total_time': total_time,
+        'total_frames': total_frames_collected,
+        'iteration_time': iteration_time,
+        'current_frames': frames_per_batch
+    }
+
     for key, val in log_info_dict.items():
-        logger.log_scalar(name=f"info/{key}", value=val, step=log_iteration)
+        logger.log_scalar(name=f"info/{key}", value=val, step=step)
+    logger.log_scalar(name="info/training_iteration", value=step, step=step)
 
     if done.any():
-        episode_rewards = tensordict_data.get(("next", agent_key, "episode_reward"))[done]
+        episode_rewards = current_tds.get(("next", agent_key, "episode_reward"))[done]
 
         # compute reward stats
-        episode_reward_mean = episode_rewards.mean().item()
-        episode_reward_max = episode_rewards.max().item()
-        episode_reward_min = episode_rewards.min().item()
+        log_episode_reward_dict = {
+            "episode_reward_mean": episode_rewards.mean().item(),
+            "episode_reward_max": episode_rewards.max().item(),
+            "episode_reward_min": episode_rewards.min().item(),
+        }
 
-        # wandb logging
-        logger.log_scalar(name="train/reward/episode_reward_mean", value=episode_reward_mean, step=log_iteration)
-        logger.log_scalar(name="train/reward/episode_reward_max", value=episode_reward_max, step=log_iteration)
-        logger.log_scalar(name="train/reward/episode_reward_min", value=episode_reward_min, step=log_iteration)
+        for key, val in log_episode_reward_dict.items():
+            logger.log_scalar(name=f"train/reward/{key}", value=val, step=step)
 
         # update to terminal progress bar
-        pbar.set_description(f"episode_reward_mean = {episode_reward_mean:.2f}", refresh=False)
+        pbar.set_description(f"episode_reward_mean = {log_episode_reward_dict['episode_reward_mean']:.2f}", refresh=False)
 
     pbar.update()
+
+
+def log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key):
+    """Log relevant evaluation metrics in WanDB including checkpointed videos."""
+    rollouts = list(rollouts.unbind(0))
+    for k, r in enumerate(rollouts):
+        next_done = r.get(("next", "done")).sum(tuple(range(r.batch_dims, r.get(("next", "done")).ndim)), dtype=torch.bool)
+        done_index = next_done.nonzero(as_tuple=True)[0][0]
+        rollouts[k] = r[:done_index + 1]
+
+    returns = [td.get(("next", agent_key, "reward")).sum(0).mean() for td in rollouts]
+    rewards = [td.get(("next", agent_key, "reward")).mean() for td in rollouts]
+
+    log_eval_dict = {
+        "episode_reward_min": min(returns),
+        "episode_reward_max": max(returns),
+        "episode_reward_mean": sum(returns) / len(rollouts),
+        "reward_mean": sum(rewards) / len(rollouts),
+        "episode_len_mean": sum([td.batch_size[0] for td in rollouts]) / len(rollouts),
+        "evaluation_time": evaluation_time,
+    }
+
+    video = torch.tensor(np.transpose(eval_env.frames[:rollouts[0].batch_size[0]], (0, 3, 1, 2)), dtype=torch.uint8).unsqueeze(0)
+
+    for key, val in log_eval_dict.items():
+        logger.log_scalar(name=f"eval/{key}", value=val, step=log_iteration)
+    logger.experiment.log({f"eval/video": wandb.Video(video, fps=1 / eval_env.world.dt, format="mp4")}, commit=False)
+
+
+def evaluate_agents(config, policy, logger, log_iteration, agent_key):
+    """evalute agents using current policy and log relevant evaluation metrics."""
+    eval_env = VmasEnv(
+        scenario=config.scenario_name,
+        num_envs=config.num_vmas_envs,
+        continuous_actions=True,
+        max_steps=config.max_steps,
+        device=device,
+        n_agents=config.n_agents,
+        render_mode="rgb_array",
+    )
+
+    evaluation_start_time = time.time()
+
+    with torch.no_grad(), set_exploration_type(ExplorationType.RANDOM if config.explore else ExplorationType.DETERMINISTIC):
+        eval_env.frames = []
+
+        rollouts = eval_env.rollout(
+            max_steps=config.max_steps,
+            policy=policy,
+            callback=rendering_callback,
+            break_when_any_done=False,
+        )
+
+        evaluation_time = time.time() - evaluation_start_time
+        log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
 def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb):
@@ -252,6 +328,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     collector = create_collector(config, env, policy, vmas_device, device, total_frames)
     replay_buffer = create_buffer(config)
     loss_module = create_loss(config, env, policy, critic, agent_key)
+
     GAE = loss_module.value_estimator
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
     logger, pbar = setup_loggers(config, use_wandb)
@@ -302,20 +379,31 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
         iteration_end_time = time.time()
         training_tds = torch.stack(training_tds)
 
+        # run evaluation every n episodes
+        if (log_iteration > 0 and log_iteration % config.evaluation_interval == 0):
+            evaluate_agents(config, policy, logger, log_iteration, agent_key)
+    
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time
         total_time += iteration_time
         total_frames_collected += config.frames_per_batch
 
-        log_info_dict = {
-            'total_time': total_time,
-            'total_frames': total_frames_collected,
-            'iteration_time': iteration_time,
-            'current_frames': config.frames_per_batch
-        }
-
         done = tensordict_data.get(("next", agent_key, "done"))
-        log_metrics(logger, pbar, done, tensordict_data, log_iteration, agent_key, log_info_dict, training_tds, training_time)
+
+        log_metrics(
+            logger=logger,
+            pbar=pbar,
+            done=done,
+            current_tds=tensordict_data,
+            step=log_iteration,
+            agent_key=agent_key,
+            training_tds=training_tds,
+            training_time=training_time,
+            total_time=total_time,
+            total_frames_collected=total_frames_collected,
+            iteration_time=iteration_time,
+            frames_per_batch=config.frames_per_batch
+        )
         log_iteration += 1
 
     return policy
@@ -368,8 +456,8 @@ def record_rollout(policy, config, device, gif_path):
 
 if __name__ == "__main__":
     config = MAPPOConfig()
-    SAVE_POLICY = False
-    SAVE_ROLLOUT = False
+    SAVE_POLICY = True
+    SAVE_ROLLOUT = True
     USE_WANDB = True
 
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
