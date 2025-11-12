@@ -52,6 +52,10 @@ class MAPPOConfig:
     evaluation_eps = 2
     explore = False
 
+    num_checkpoints = 5 # how many policies will be saved during training
+    checkpoint_interval = n_iters // num_checkpoints
+    save_policy = True
+
 
 def setup_environment():
     """Determines device, sets seed and configures torch/tensordict settings."""
@@ -294,7 +298,7 @@ def log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iter
 
 
 def evaluate_agents(config, policy, logger, log_iteration, agent_key):
-    """evalute agents using current policy and log relevant evaluation metrics."""
+    """Evalute agents using current policy and log relevant evaluation metrics."""
     eval_env = VmasEnv(
         scenario=config.scenario_name,
         num_envs=config.num_vmas_envs,
@@ -322,6 +326,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key):
 
 
 def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb):
+    """Mapin MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
 
@@ -382,7 +387,11 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
         # run evaluation every n episodes
         if (log_iteration > 0 and log_iteration % config.evaluation_interval == 0):
             evaluate_agents(config, policy, logger, log_iteration, agent_key)
-    
+
+        # save checkpointed policy every n episodes
+        if (log_iteration > 0 and config.save_policy and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
+            save_policy(policy, log_iteration)
+
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time
         total_time += iteration_time
@@ -409,11 +418,13 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     return policy
 
 
-def save_policy(policy, save_path):
+def save_policy(policy, checkpoint):
     """Saves the state dictionary of trained policy."""
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(policy.state_dict(), save_path)
-    print(f"policy saved to {save_path}")
+    policy_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
+
+    os.makedirs(os.path.dirname(policy_path), exist_ok=True)
+    torch.save(policy.state_dict(), policy_path)
+    print(f"iteration {checkpoint} policy saved to {policy_path}")
 
 
 def record_rollout(policy, config, device, gif_path):
@@ -456,12 +467,10 @@ def record_rollout(policy, config, device, gif_path):
 
 if __name__ == "__main__":
     config = MAPPOConfig()
-    SAVE_POLICY = True
-    SAVE_ROLLOUT = True
+    SAVE_ROLLOUT = False
     USE_WANDB = True
 
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
-    policy_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}_policy.pt"
     gif_path = f"./rollout_videos/mappo_{config.scenario_name}_{timestamp}_rollout.gif"
 
     vmas_device, device = setup_environment()
@@ -479,5 +488,4 @@ if __name__ == "__main__":
         use_wandb=USE_WANDB
     )
 
-    if SAVE_POLICY: save_policy(trained_policy, policy_path)
     if SAVE_ROLLOUT: record_rollout(trained_policy, config, device, gif_path)

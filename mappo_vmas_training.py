@@ -23,12 +23,19 @@ from torchrl.objectives import ClipPPOLoss, ValueEstimators
 from torchrl.record.loggers.wandb import WandbLogger
 import wandb
 
+from football_design import FootballDesign
+
 
 class MAPPOConfig:
-    scenario_name = "balance"
-    n_agents = 3
+    scenario_name = "football"
+    scenario = FootballDesign
+    b_agents = 1
+    r_agents = 1
+    n_agents = b_agents + r_agents
+    observe_teammates = b_agents > 1
+
     max_steps = 50 # max no. timesteps per episode
-    n_iters = 100 # no. of training iterations
+    n_iters = 50 # no. of training iterations
     frames_per_batch = 2_000  # total timesteps across episodes in one batch per iteration
     num_vmas_envs = frames_per_batch // max_steps
 
@@ -52,6 +59,24 @@ class MAPPOConfig:
     evaluation_eps = 2
     explore = False
 
+    num_checkpoints = 5 # how many policies will be saved during training
+    checkpoint_interval = n_iters // num_checkpoints
+
+
+class DummyLogger:
+    """
+    Dummy logger used when not using WandB; mimics the structure expected by the main logging functions.
+    """
+    def __init__(self):
+        self.experiment = self.DummyExperiment()
+
+    def log_scalar(self, name, value, step): pass
+
+    def log(self, value, commit): pass
+    
+    class DummyExperiment:
+        def log(self, *args, **kwargs): pass
+
 
 def setup_environment():
     """Determines device, sets seed and configures torch/tensordict settings."""
@@ -67,13 +92,14 @@ def setup_environment():
 def make_env(config, vmas_device, show_specs, show_keys):
     """Creates VMAS enviroment and applies transformations."""
     env = VmasEnv(
-        scenario=config.scenario_name,
+        scenario=config.scenario(),
         num_envs=config.num_vmas_envs,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=vmas_device,
-        # Scenario kwargs
-        n_agents=config.n_agents,
+        n_blue_agents=config.b_agents,
+        n_red_agents=config.r_agents,
+        observe_teammates=config.observe_teammates,
     )
 
     if show_specs:
@@ -203,9 +229,6 @@ def setup_loggers(config, use_wandb):
         timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
         logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
     else:
-        class DummyLogger:
-            def log_scalar(self, name, value, step): pass
-            def log(self, value, commit): pass
         logger = DummyLogger()  
 
     pbar = tqdm(total=config.n_iters, desc="episode_reward_mean = 0")
@@ -294,14 +317,16 @@ def log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iter
 
 
 def evaluate_agents(config, policy, logger, log_iteration, agent_key):
-    """evalute agents using current policy and log relevant evaluation metrics."""
+    """Evalute agents using current policy and log relevant evaluation metrics."""
     eval_env = VmasEnv(
-        scenario=config.scenario_name,
+        scenario=config.scenario(),
         num_envs=config.num_vmas_envs,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=device,
-        n_agents=config.n_agents,
+        n_blue_agents=config.b_agents,
+        n_red_agents=config.r_agents,
+        observe_teammates=config.observe_teammates,
         render_mode="rgb_array",
     )
 
@@ -321,7 +346,8 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key):
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
-def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb):
+def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies):
+    """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
 
@@ -382,7 +408,11 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
         # run evaluation every n episodes
         if (log_iteration > 0 and log_iteration % config.evaluation_interval == 0):
             evaluate_agents(config, policy, logger, log_iteration, agent_key)
-    
+
+        # save checkpointed policy every n episodes
+        if (log_iteration > 0 and save_policies and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
+            save_policy(policy, log_iteration)
+
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time
         total_time += iteration_time
@@ -409,22 +439,26 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     return policy
 
 
-def save_policy(policy, save_path):
+def save_policy(policy, checkpoint):
     """Saves the state dictionary of trained policy."""
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(policy.state_dict(), save_path)
-    print(f"policy saved to {save_path}")
+    policy_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
+
+    os.makedirs(os.path.dirname(policy_path), exist_ok=True)
+    torch.save(policy.state_dict(), policy_path)
+    print(f"iteration {checkpoint} policy saved to {policy_path}")
 
 
 def record_rollout(policy, config, device, gif_path):
     """Runs a single episode rollout using policy and saves it as a GIF."""
     record_env = VmasEnv(
-        scenario=config.scenario_name,
+        scenario=config.scenario(),
         num_envs=1,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=device,
-        n_agents=config.n_agents,
+        n_blue_agents=config.b_agents,
+        n_red_agents=config.r_agents,
+        observe_teammates=config.observe_teammates,
         render_mode="rgb_array",
     )
 
@@ -456,12 +490,11 @@ def record_rollout(policy, config, device, gif_path):
 
 if __name__ == "__main__":
     config = MAPPOConfig()
-    SAVE_POLICY = True
     SAVE_ROLLOUT = True
+    SAVE_POLICY = True
     USE_WANDB = True
 
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
-    policy_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}_policy.pt"
     gif_path = f"./rollout_videos/mappo_{config.scenario_name}_{timestamp}_rollout.gif"
 
     vmas_device, device = setup_environment()
@@ -476,8 +509,8 @@ if __name__ == "__main__":
         agent_key=agent_key,
         device=device,
         vmas_device=vmas_device,
-        use_wandb=USE_WANDB
+        use_wandb=USE_WANDB,
+        save_policies=SAVE_POLICY,
     )
 
-    if SAVE_POLICY: save_policy(trained_policy, policy_path)
     if SAVE_ROLLOUT: record_rollout(trained_policy, config, device, gif_path)
