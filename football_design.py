@@ -76,7 +76,7 @@ class FootballDesign(BaseScenario):
         # Actions shooting
         self.enable_shooting = kwargs.pop(
             "enable_shooting", False
-        )  # Whether to enable an extra 2 actions (for rotation and shooting). Only avaioable for non-ai agents
+        )  # Whether to enable an extra 2 actions (for rotation and shooting). Only available for non-ai agents
         self.u_rot_multiplier = kwargs.pop("u_rot_multiplier", 0.0003)
         self.u_shoot_multiplier = kwargs.pop("u_shoot_multiplier", 0.6)
         self.shooting_radius = kwargs.pop("shooting_radius", 0.08)

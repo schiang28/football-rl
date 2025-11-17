@@ -27,46 +27,52 @@ from football_design import FootballDesign
 
 
 class MAPPOConfig:
-    scenario_name = "football"
+    # Environment
+    max_steps = 50 # max no. timesteps per episode
+    scenario_name = "balance"
     scenario = FootballDesign
     b_agents = 1
     r_agents = 1
     n_agents = b_agents + r_agents
     observe_teammates = b_agents > 1
 
-    max_steps = 50 # max no. timesteps per episode
-    n_iters = 50 # no. of training iterations
-    frames_per_batch = 2_000  # total timesteps across episodes in one batch per iteration
-    num_vmas_envs = frames_per_batch // max_steps
-
-    num_epochs = 10  # no. of optimisation steps per training iteration
-    minibatch_size = 256  # no. samples processed per optimisation step
-    lr = 5e-4
-    max_grad_norm = 1.0  # maximum norm for the gradients
-    clip_epsilon = 0.2  # clip value for PPO loss
-    entropy_eps = 1e-4
-
-    gamma = 0.99
-    lmbda = 0.9
-    num_cells = 256 # size of each layer in nn
-    depth = 2 # no. hidden layer in policy/value networks
-
+    # Model
     mappo = True
     share_parameters_policy = True
     share_parameters_critic = True
+    num_cells = 256 # size of each layer in nn
+    depth = 2 # no. hidden layer in policy/value networks
 
-    evaluation_interval = 5
-    evaluation_eps = 2
+    # Collector
+    frames_per_batch = 4_000  # total timesteps across episodes in one batch per iteration
+    n_iters = 500 # no. of training iterations
+    num_vmas_envs = frames_per_batch // max_steps
+
+    # Loss
+    normalize_advantage = True
+    gamma = 0.99
+    lmbda = 0.9
+    entropy_eps = 5e-3
+    clip_epsilon = 0.2  # clip value for PPO loss
+
+    # Training
+    num_epochs = 20  # no. of optimisation steps per training iteration
+    minibatch_size = 256  # no. samples processed per optimisation step
+    lr = 2e-4
+    max_grad_norm = 5.0  # maximum norm for the gradients
+
+    # Evaluation
+    evaluation_interval = n_iters // 10
     explore = False
 
-    num_checkpoints = 5 # how many policies will be saved during training
+    # Checkpoints
+    num_checkpoints = 10 # how many policies will be saved during training
     checkpoint_interval = n_iters // num_checkpoints
 
 
+
 class DummyLogger:
-    """
-    Dummy logger used when not using WandB; mimics the structure expected by the main logging functions.
-    """
+    """ Dummy logger used when not using WandB; mimics the structure expected by the main logging functions. """
     def __init__(self):
         self.experiment = self.DummyExperiment()
 
@@ -91,8 +97,11 @@ def setup_environment():
 
 def make_env(config, vmas_device, show_specs, show_keys):
     """Creates VMAS enviroment and applies transformations."""
+    if config.scenario_name == "football": scenario = config.scenario()
+    else: scenario = config.scenario_name
+
     env = VmasEnv(
-        scenario=config.scenario(),
+        scenario=scenario,
         num_envs=config.num_vmas_envs,
         continuous_actions=True,
         max_steps=config.max_steps,
@@ -136,7 +145,7 @@ def build_mappo_modules(env, config, device, agent_key):
             num_cells=config.num_cells,
             activation_class=torch.nn.Tanh,
         ),
-        NormalParamExtractor(),
+        NormalParamExtractor("biased_softplus_1.0"),
     )
 
     policy_module = TensorDictModule(
@@ -318,8 +327,11 @@ def log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iter
 
 def evaluate_agents(config, policy, logger, log_iteration, agent_key):
     """Evalute agents using current policy and log relevant evaluation metrics."""
+    if config.scenario_name == "football": scenario = config.scenario()
+    else: scenario = config.scenario_name
+
     eval_env = VmasEnv(
-        scenario=config.scenario(),
+        scenario=scenario,
         num_envs=config.num_vmas_envs,
         continuous_actions=True,
         max_steps=config.max_steps,
@@ -327,7 +339,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key):
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
-        render_mode="rgb_array",
+        # render_mode="rgb_array",
     )
 
     evaluation_start_time = time.time()
@@ -378,6 +390,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
         # compute GAE and add it to the data
         with torch.no_grad():
             GAE(tensordict_data, params=loss_module.critic_network_params, target_params=loss_module.target_critic_network_params)
+            # TODO: standardise values using utils standardize function
 
         # update replay buffer
         data_view = tensordict_data.reshape(-1)
@@ -395,7 +408,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
                 training_tds.append(loss_vals.detach())
                 loss_value = (loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"])
                 loss_value.backward()
-                total_norm = torch.nn.utils.clip_grad_norm_(loss_module.parameters(), config.max_grad_norm)
+                total_norm = torch.nn.utils.clip_grad_norm_(loss_module.parameters(), config.max_grad_norm, error_if_nonfinite=True)
                 training_tds[-1].set("grad_norm", total_norm.mean())
 
                 optim.step()
@@ -450,8 +463,11 @@ def save_policy(policy, checkpoint):
 
 def record_rollout(policy, config, device, gif_path):
     """Runs a single episode rollout using policy and saves it as a GIF."""
+    if config.scenario_name == "football": scenario = config.scenario()
+    else: config.scenario_name
+
     record_env = VmasEnv(
-        scenario=config.scenario(),
+        scenario=scenario,
         num_envs=1,
         continuous_actions=True,
         max_steps=config.max_steps,
@@ -459,7 +475,7 @@ def record_rollout(policy, config, device, gif_path):
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
-        render_mode="rgb_array",
+        # render_mode="rgb_array",
     )
 
     record_env = TransformedEnv(record_env) 
@@ -490,8 +506,8 @@ def record_rollout(policy, config, device, gif_path):
 
 if __name__ == "__main__":
     config = MAPPOConfig()
-    SAVE_ROLLOUT = True
-    SAVE_POLICY = True
+    SAVE_ROLLOUT = False
+    SAVE_POLICY = False
     USE_WANDB = True
 
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
