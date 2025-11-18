@@ -24,12 +24,14 @@ from torchrl.record.loggers.wandb import WandbLogger
 import wandb
 
 from football_design import FootballDesign
+from utils import standardize, check_loss_values, ClipModule
+from logging_tools import DummyLogger
 
 
 class MAPPOConfig:
     # Environment
-    max_steps = 50 # max no. timesteps per episode
-    scenario_name = "balance"
+    max_steps = 50 # max no. timesteps per episode (def. 500)
+    scenario_name = "football"
     scenario = FootballDesign
     b_agents = 1
     r_agents = 1
@@ -44,8 +46,8 @@ class MAPPOConfig:
     depth = 2 # no. hidden layer in policy/value networks
 
     # Collector
+    n_iters = 100 # no. of training iterations (def. 500)
     frames_per_batch = 4_000  # total timesteps across episodes in one batch per iteration
-    n_iters = 500 # no. of training iterations
     num_vmas_envs = frames_per_batch // max_steps
 
     # Loss
@@ -58,30 +60,17 @@ class MAPPOConfig:
     # Training
     num_epochs = 20  # no. of optimisation steps per training iteration
     minibatch_size = 256  # no. samples processed per optimisation step
-    lr = 2e-4
+    lr = 1e-4 # learning rate (def. 5e-5)
     max_grad_norm = 5.0  # maximum norm for the gradients
 
     # Evaluation
-    evaluation_interval = n_iters // 10
+    evaluation_interval = n_iters // 20
     explore = False
 
     # Checkpoints
-    num_checkpoints = 10 # how many policies will be saved during training
+    num_checkpoints = 5 # how many policies will be saved during training
     checkpoint_interval = n_iters // num_checkpoints
 
-
-
-class DummyLogger:
-    """ Dummy logger used when not using WandB; mimics the structure expected by the main logging functions. """
-    def __init__(self):
-        self.experiment = self.DummyExperiment()
-
-    def log_scalar(self, name, value, step): pass
-
-    def log(self, value, commit): pass
-    
-    class DummyExperiment:
-        def log(self, *args, **kwargs): pass
 
 
 def setup_environment():
@@ -145,6 +134,7 @@ def build_mappo_modules(env, config, device, agent_key):
             num_cells=config.num_cells,
             activation_class=torch.nn.Tanh,
         ),
+        ClipModule(-5, 5),
         NormalParamExtractor("biased_softplus_1.0"),
     )
 
@@ -235,7 +225,7 @@ def create_loss(config, env, policy, critic, agent_key):
 def setup_loggers(config, use_wandb):
     """Setup tqdm logger and WanDB logger if used."""
     if use_wandb:
-        timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+        timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
         logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
     else:
         logger = DummyLogger()  
@@ -367,7 +357,6 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     replay_buffer = create_buffer(config)
     loss_module = create_loss(config, env, policy, critic, agent_key)
 
-    GAE = loss_module.value_estimator
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
     logger, pbar = setup_loggers(config, use_wandb)
 
@@ -387,10 +376,14 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
             done_or_term = tensordict_data.get(env_key).unsqueeze(-1).expand(reward_shape)
             tensordict_data.set(agent_next + (key,), done_or_term)
 
-        # compute GAE and add it to the data
+        # value estimator and standardise excluding the agent dimension with gradient clipping
         with torch.no_grad():
-            GAE(tensordict_data, params=loss_module.critic_network_params, target_params=loss_module.target_critic_network_params)
-            # TODO: standardise values using utils standardize function
+            loss_module.value_estimator(tensordict_data, params=loss_module.critic_network_params, target_params=loss_module.target_critic_network_params)
+            advantage = tensordict_data.get(loss_module.tensor_keys.advantage)
+
+            if config.normalize_advantage and advantage.numel() > 1:
+                advantage = standardize(advantage, exclude_dims=[-2])
+                tensordict_data.set(loss_module.tensor_keys.advantage, advantage)
 
         # update replay buffer
         data_view = tensordict_data.reshape(-1)
@@ -407,6 +400,8 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
                 loss_vals = loss_module(subdata)
                 training_tds.append(loss_vals.detach())
                 loss_value = (loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"])
+                if not torch.isfinite(loss_value): check_loss_values(advantage, loss_vals, subdata, agent_key)
+
                 loss_value.backward()
                 total_norm = torch.nn.utils.clip_grad_norm_(loss_module.parameters(), config.max_grad_norm, error_if_nonfinite=True)
                 training_tds[-1].set("grad_norm", total_norm.mean())
@@ -507,10 +502,10 @@ def record_rollout(policy, config, device, gif_path):
 if __name__ == "__main__":
     config = MAPPOConfig()
     SAVE_ROLLOUT = False
-    SAVE_POLICY = False
+    SAVE_POLICY = True
     USE_WANDB = True
 
-    timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     gif_path = f"./rollout_videos/mappo_{config.scenario_name}_{timestamp}_rollout.gif"
 
     vmas_device, device = setup_environment()

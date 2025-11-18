@@ -3,6 +3,26 @@ from typing import Sequence
 import torch
 
 
+class ClipModule(torch.nn.Module):
+    def __init__(self, min_val, max_val):
+        super().__init__()
+        self.min_val = min_val
+        self.max_val = max_val
+
+    def forward(self, x):
+        return torch.clamp(x, min=self.min_val, max=self.max_val) 
+
+
+def check_loss_values(advantage, loss_vals, subdata, agent_key):
+    print("NON-FINITE loss detected")
+    print("advantage min/max", advantage.min().item(), advantage.max().item())
+    print("loss_objective:", loss_vals["loss_objective"])
+    print("loss_critic:", loss_vals["loss_critic"])
+    print("loss_entropy:", loss_vals["loss_entropy"])
+    print("loc min/max:", subdata[(agent_key, "loc")].min().item(), subdata[(agent_key, "loc")].max().item())
+    print("scale min/max:", subdata[(agent_key, "scale")].min().item(), subdata[(agent_key, "scale")].max().item())
+
+
 def standardize(input, exclude_dims: Sequence[int] = (), mean=None, std=None):
     """
     Standardizes the input tensor with the possibility of excluding specific dims from the statistics.

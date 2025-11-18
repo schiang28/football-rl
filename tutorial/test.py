@@ -23,38 +23,79 @@ from torchrl.objectives import ClipPPOLoss, ValueEstimators
 from torchrl.record.loggers.wandb import WandbLogger
 import wandb
 
+from football_design import FootballDesign
+from utils import standardize
+
 
 class MAPPOConfig:
-    scenario_name = "balance"
-    n_agents = 3
+    # Environment
     max_steps = 50 # max no. timesteps per episode
-    n_iters = 100 # no. of training iterations
-    frames_per_batch = 2_000  # total timesteps across episodes in one batch per iteration
-    num_vmas_envs = frames_per_batch // max_steps
+    scenario_name = "balance"
+    scenario = FootballDesign
+    b_agents = 1
+    r_agents = 1
+    n_agents = b_agents + r_agents
+    observe_teammates = b_agents > 1
 
-    num_epochs = 10  # no. of optimisation steps per training iteration
-    minibatch_size = 256  # no. samples processed per optimisation step
-    lr = 5e-4
-    max_grad_norm = 1.0  # maximum norm for the gradients
-    clip_epsilon = 0.2  # clip value for PPO loss
-    entropy_eps = 1e-4
-
-    gamma = 0.99
-    lmbda = 0.9
-    num_cells = 256 # size of each layer in nn
-    depth = 2 # no. hidden layer in policy/value networks
-
+    # Model
     mappo = True
     share_parameters_policy = True
     share_parameters_critic = True
+    num_cells = 256 # size of each layer in nn
+    depth = 2 # no. hidden layer in policy/value networks
 
-    evaluation_interval = 5
-    evaluation_eps = 2
+    # Collector
+    frames_per_batch = 4_000  # total timesteps across episodes in one batch per iteration
+    n_iters = 500 # no. of training iterations
+    num_vmas_envs = frames_per_batch // max_steps
+
+    # Loss
+    normalize_advantage = True
+    gamma = 0.99
+    lmbda = 0.9
+    entropy_eps = 5e-3
+    clip_epsilon = 0.2  # clip value for PPO loss
+
+    # Training
+    num_epochs = 20  # no. of optimisation steps per training iteration
+    minibatch_size = 256  # no. samples processed per optimisation step
+    lr = 2e-4
+    max_grad_norm = 5.0  # maximum norm for the gradients
+
+    # Evaluation
+    evaluation_interval = n_iters // 10
     explore = False
 
-    num_checkpoints = 5 # how many policies will be saved during training
+    # Checkpoints
+    num_checkpoints = 10 # how many policies will be saved during training
     checkpoint_interval = n_iters // num_checkpoints
-    save_policy = True
+
+
+
+class DummyLogger:
+    """ Dummy logger used when not using WandB; mimics the structure expected by the main logging functions. """
+    def __init__(self):
+        self.experiment = self.DummyExperiment()
+
+    def log_scalar(self, name, value, step): pass
+
+    def log(self, value, commit): pass
+    
+    class DummyExperiment:
+        def log(self, *args, **kwargs): pass
+
+
+
+class ClipModule(torch.nn.Module):
+    def __init__(self, min_val, max_val):
+        super().__init__()
+        self.min_val = min_val
+        self.max_val = max_val
+
+    def forward(self, x):
+        # Using the original function name
+        return torch.clamp(x, min=self.min_val, max=self.max_val) 
+        # OR: return torch.clip(x, self.min_val, self.max_val)
 
 
 def setup_environment():
@@ -70,14 +111,18 @@ def setup_environment():
 
 def make_env(config, vmas_device, show_specs, show_keys):
     """Creates VMAS enviroment and applies transformations."""
+    if config.scenario_name == "football": scenario = config.scenario()
+    else: scenario = config.scenario_name
+
     env = VmasEnv(
-        scenario=config.scenario_name,
+        scenario=scenario,
         num_envs=config.num_vmas_envs,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=vmas_device,
-        # Scenario kwargs
-        n_agents=config.n_agents,
+        n_blue_agents=config.b_agents,
+        n_red_agents=config.r_agents,
+        observe_teammates=config.observe_teammates,
     )
 
     if show_specs:
@@ -114,7 +159,8 @@ def build_mappo_modules(env, config, device, agent_key):
             num_cells=config.num_cells,
             activation_class=torch.nn.Tanh,
         ),
-        NormalParamExtractor(),
+        ClipModule(-5, 5),
+        NormalParamExtractor("biased_softplus_1.0"),
     )
 
     policy_module = TensorDictModule(
@@ -207,9 +253,6 @@ def setup_loggers(config, use_wandb):
         timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
         logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
     else:
-        class DummyLogger:
-            def log_scalar(self, name, value, step): pass
-            def log(self, value, commit): pass
         logger = DummyLogger()  
 
     pbar = tqdm(total=config.n_iters, desc="episode_reward_mean = 0")
@@ -299,14 +342,19 @@ def log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iter
 
 def evaluate_agents(config, policy, logger, log_iteration, agent_key):
     """Evalute agents using current policy and log relevant evaluation metrics."""
+    if config.scenario_name == "football": scenario = config.scenario()
+    else: scenario = config.scenario_name
+
     eval_env = VmasEnv(
-        scenario=config.scenario_name,
+        scenario=scenario,
         num_envs=config.num_vmas_envs,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=device,
-        n_agents=config.n_agents,
-        render_mode="rgb_array",
+        n_blue_agents=config.b_agents,
+        n_red_agents=config.r_agents,
+        observe_teammates=config.observe_teammates,
+        # render_mode="rgb_array",
     )
 
     evaluation_start_time = time.time()
@@ -325,8 +373,8 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key):
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
-def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb):
-    """Mapin MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
+def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies):
+    """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
 
@@ -334,7 +382,6 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     replay_buffer = create_buffer(config)
     loss_module = create_loss(config, env, policy, critic, agent_key)
 
-    GAE = loss_module.value_estimator
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
     logger, pbar = setup_loggers(config, use_wandb)
 
@@ -354,9 +401,14 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
             done_or_term = tensordict_data.get(env_key).unsqueeze(-1).expand(reward_shape)
             tensordict_data.set(agent_next + (key,), done_or_term)
 
-        # compute GAE and add it to the data
+        # value estimator and standardise excluding the agent dimension with gradient clipping
         with torch.no_grad():
-            GAE(tensordict_data, params=loss_module.critic_network_params, target_params=loss_module.target_critic_network_params)
+            loss_module.value_estimator(tensordict_data, params=loss_module.critic_network_params, target_params=loss_module.target_critic_network_params)
+            advantage = tensordict_data.get(loss_module.tensor_keys.advantage)
+
+            if config.normalize_advantage and advantage.numel() > 1:
+                advantage = standardize(advantage, exclude_dims=[-2])
+                tensordict_data.set(loss_module.tensor_keys.advantage, advantage)
 
         # update replay buffer
         data_view = tensordict_data.reshape(-1)
@@ -373,8 +425,19 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
                 loss_vals = loss_module(subdata)
                 training_tds.append(loss_vals.detach())
                 loss_value = (loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"])
+
+                if not torch.isfinite(loss_value):
+                    print("NON-FINITE loss detected")
+                    print("advantage min/max", advantage.min().item(), advantage.max().item())
+                    print("loss_objective:", loss_vals["loss_objective"])
+                    print("loss_critic:", loss_vals["loss_critic"])
+                    print("loss_entropy:", loss_vals["loss_entropy"])
+                    print("loc min/max:", subdata[(agent_key, "loc")].min().item(), subdata[(agent_key, "loc")].max().item())
+                    print("scale min/max:", subdata[(agent_key, "scale")].min().item(), subdata[(agent_key, "scale")].max().item())
+
+
                 loss_value.backward()
-                total_norm = torch.nn.utils.clip_grad_norm_(loss_module.parameters(), config.max_grad_norm)
+                total_norm = torch.nn.utils.clip_grad_norm_(loss_module.parameters(), config.max_grad_norm, error_if_nonfinite=True)
                 training_tds[-1].set("grad_norm", total_norm.mean())
 
                 optim.step()
@@ -389,7 +452,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
             evaluate_agents(config, policy, logger, log_iteration, agent_key)
 
         # save checkpointed policy every n episodes
-        if (log_iteration > 0 and config.save_policy and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
+        if (log_iteration > 0 and save_policies and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
             save_policy(policy, log_iteration)
 
         training_time = iteration_end_time - training_start_time
@@ -429,14 +492,19 @@ def save_policy(policy, checkpoint):
 
 def record_rollout(policy, config, device, gif_path):
     """Runs a single episode rollout using policy and saves it as a GIF."""
+    if config.scenario_name == "football": scenario = config.scenario()
+    else: config.scenario_name
+
     record_env = VmasEnv(
-        scenario=config.scenario_name,
+        scenario=scenario,
         num_envs=1,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=device,
-        n_agents=config.n_agents,
-        render_mode="rgb_array",
+        n_blue_agents=config.b_agents,
+        n_red_agents=config.r_agents,
+        observe_teammates=config.observe_teammates,
+        # render_mode="rgb_array",
     )
 
     record_env = TransformedEnv(record_env) 
@@ -468,6 +536,7 @@ def record_rollout(policy, config, device, gif_path):
 if __name__ == "__main__":
     config = MAPPOConfig()
     SAVE_ROLLOUT = False
+    SAVE_POLICY = False
     USE_WANDB = True
 
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
@@ -485,7 +554,8 @@ if __name__ == "__main__":
         agent_key=agent_key,
         device=device,
         vmas_device=vmas_device,
-        use_wandb=USE_WANDB
+        use_wandb=USE_WANDB,
+        save_policies=SAVE_POLICY,
     )
 
     if SAVE_ROLLOUT: record_rollout(trained_policy, config, device, gif_path)
