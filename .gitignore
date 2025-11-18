@@ -3,3 +3,5 @@ __pycache__/
 wandb_logs/
 
 rollout_videos/
+
+loaded_policy_rollouts/

@@ -470,7 +470,6 @@ def record_rollout(policy, config, device, gif_path):
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
-        # render_mode="rgb_array",
     )
 
     record_env = TransformedEnv(record_env) 
