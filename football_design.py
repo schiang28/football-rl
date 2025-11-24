@@ -35,30 +35,16 @@ class FootballDesign(BaseScenario):
 
         # Agent spawning
         self.spawn_in_formation = kwargs.pop("spawn_in_formation", False)
-        self.only_blue_formation = kwargs.pop(
-            "only_blue_formation", True
-        )  # Only spawn blue agents in formation
+        self.only_blue_formation = kwargs.pop("only_blue_formation", True)  # Only spawn blue agents in formation
         self.formation_agents_per_column = kwargs.pop("formation_agents_per_column", 2)
-        self.randomise_formation_indices = kwargs.pop(
-            "randomise_formation_indices", False
-        )  # If False, each agent will always be in the same formation spot
-        self.formation_noise = kwargs.pop(
-            "formation_noise", 0.2
-        )  # Noise on formation positions
+        self.randomise_formation_indices = kwargs.pop("randomise_formation_indices", False)  # If False, each agent will always be in the same formation spot
+        self.formation_noise = kwargs.pop("formation_noise", 0.2)  # Noise on formation positions
 
         # Ai config
-        self.n_traj_points = kwargs.pop(
-            "n_traj_points", 0
-        )  # Number of spline trajectory points to plot for heuristic (ai) agents
-        self.ai_speed_strength = kwargs.pop(
-            "ai_strength", 1.0
-        )  # The speed of the ai 0<=x<=1
-        self.ai_decision_strength = kwargs.pop(
-            "ai_decision_strength", 1.0
-        )  # The decision strength of the ai 0<=x<=1
-        self.ai_precision_strength = kwargs.pop(
-            "ai_precision_strength", 1.0
-        )  # The precision strength of the ai 0<=x<=1
+        self.n_traj_points = kwargs.pop("n_traj_points", 0)  # Number of spline trajectory points to plot for heuristic (ai) agents
+        self.ai_speed_strength = kwargs.pop("ai_strength", 1.0)  # The speed of the ai 0<=x<=1
+        self.ai_decision_strength = kwargs.pop("ai_decision_strength", 1.0)  # The decision strength of the ai 0<=x<=1
+        self.ai_precision_strength = kwargs.pop("ai_precision_strength", 1.0)  # The precision strength of the ai 0<=x<=1
         self.disable_ai_red = kwargs.pop("disable_ai_red", False)
 
         # Task sizes
@@ -74,9 +60,7 @@ class FootballDesign(BaseScenario):
         self.u_multiplier = kwargs.pop("u_multiplier", 0.1)
 
         # Actions shooting
-        self.enable_shooting = kwargs.pop(
-            "enable_shooting", False
-        )  # Whether to enable an extra 2 actions (for rotation and shooting). Only available for non-ai agents
+        self.enable_shooting = kwargs.pop("enable_shooting", False) # Whether to enable an extra 2 actions (for rotation and shooting). Only available for non-ai agents
         self.u_rot_multiplier = kwargs.pop("u_rot_multiplier", 0.0003)
         self.u_shoot_multiplier = kwargs.pop("u_shoot_multiplier", 0.6)
         self.shooting_radius = kwargs.pop("shooting_radius", 0.08)
@@ -88,18 +72,12 @@ class FootballDesign(BaseScenario):
 
         # Rewards
         self.dense_reward = kwargs.pop("dense_reward", True)
-        self.pos_shaping_factor_ball_goal = kwargs.pop(
-            "pos_shaping_factor_ball_goal", 10.0
-        )  # Reward for moving the ball towards the opponents' goal. This can be annealed in a curriculum.
-        self.pos_shaping_factor_agent_ball = kwargs.pop(
-            "pos_shaping_factor_agent_ball", 0.1
-        )  # Reward for moving the closest agent to the ball in a team closer to it.
+        self.pos_shaping_factor_ball_goal = kwargs.pop("pos_shaping_factor_ball_goal", 10.0)  # Reward for moving the ball towards the opponents' goal. This can be annealed in a curriculum.
+        self.pos_shaping_factor_agent_ball = kwargs.pop("pos_shaping_factor_agent_ball", 0.1)  # Reward for moving the closest agent to the ball in a team closer to it.
         # This is useful for exploration and can be annealed in a curriculum.
         # This reward does not trigger if the agent is less than distance_to_ball_trigger from the ball or the ball is moving
         self.distance_to_ball_trigger = kwargs.pop("distance_to_ball_trigger", 0.4)
-        self.scoring_reward = kwargs.pop(
-            "scoring_reward", 100.0
-        )  # Discrete reward for scoring
+        self.scoring_reward = kwargs.pop("scoring_reward", 100.0)  # Discrete reward for scoring
 
         # Observations
         self.observe_teammates = kwargs.pop("observe_teammates", True)
@@ -112,6 +90,7 @@ class FootballDesign(BaseScenario):
                 "which is a bool that turns on/off the dense reward"
             )
         ScenarioUtils.check_kwargs_consumed(kwargs)
+
 
     def make_world(self, batch_dim: int, device: torch.device, **kwargs):
         self.init_params(**kwargs)
@@ -160,10 +139,8 @@ class FootballDesign(BaseScenario):
         self.reset_walls(env_index)
         self.reset_goals(env_index)
         self.reset_controllers(env_index)
-        if env_index is None:
-            self._done[:] = False
-        else:
-            self._done[env_index] = False
+        if env_index is None: self._done[:] = False
+        else: self._done[env_index] = False
 
     def init_world(self, batch_dim: int, device: torch.device):
         # Make world

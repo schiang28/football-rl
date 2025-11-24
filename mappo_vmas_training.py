@@ -27,10 +27,12 @@ from football_design import FootballDesign
 from utils import standardize, check_loss_values, ClipModule
 from logging_tools import DummyLogger
 
+os.environ["PYGLET_HEADLESS"] = "true"
+
 
 class MAPPOConfig:
     # Environment
-    max_steps = 50 # max no. timesteps per episode (def. 500)
+    max_steps = 100 # max no. timesteps per episode (def. 500)
     scenario_name = "football"
     scenario = FootballDesign
     b_agents = 1
@@ -47,24 +49,24 @@ class MAPPOConfig:
 
     # Collector
     n_iters = 100 # no. of training iterations (def. 500)
-    frames_per_batch = 4_000  # total timesteps across episodes in one batch per iteration
+    frames_per_batch = 10_000  # total timesteps across episodes in one batch per iteration
     num_vmas_envs = frames_per_batch // max_steps
 
     # Loss
     normalize_advantage = True
     gamma = 0.99
     lmbda = 0.9
-    entropy_eps = 5e-3
+    entropy_eps = 3e-4
     clip_epsilon = 0.2  # clip value for PPO loss
 
     # Training
     num_epochs = 20  # no. of optimisation steps per training iteration
-    minibatch_size = 256  # no. samples processed per optimisation step
-    lr = 1e-4 # learning rate (def. 5e-5)
+    minibatch_size = 512  # no. samples processed per optimisation step
+    lr = 5e-5 # learning rate (def. 5e-5)
     max_grad_norm = 5.0  # maximum norm for the gradients
 
     # Evaluation
-    evaluation_interval = n_iters // 20
+    evaluation_interval = n_iters // 10
     explore = False
 
     # Checkpoints
@@ -315,7 +317,7 @@ def log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iter
     logger.experiment.log({f"eval/video": wandb.Video(video, fps=1 / eval_env.world.dt, format="mp4")}, commit=False)
 
 
-def evaluate_agents(config, policy, logger, log_iteration, agent_key):
+def evaluate_agents(config, policy, logger, log_iteration, agent_key, device):
     """Evalute agents using current policy and log relevant evaluation metrics."""
     if config.scenario_name == "football": scenario = config.scenario()
     else: scenario = config.scenario_name
@@ -329,7 +331,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key):
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
-        # render_mode="rgb_array",
+        render_mode="rgb_array",
     )
 
     evaluation_start_time = time.time()
@@ -348,7 +350,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key):
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
-def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies):
+def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, load_checkpoint_path=None):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -363,6 +365,16 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     log_iteration = 0
     total_time = 0
     total_frames_collected = 0
+
+    # If pre-trained policy provided, load that first
+    if load_checkpoint_path:
+        checkpoint = torch.load(load_checkpoint_path, map_location=device)
+        policy.load_state_dict(checkpoint['policy_state_dict'])
+        critic.load_state_dict(checkpoint['critic_state_dict'])
+        optim.load_state_dict(checkpoint['optimizer_state_dict'])
+        log_iteration = checkpoint['iteration'] + 1
+        total_frames_collected = log_iteration * config.frames_per_batch
+        print(f"Loaded policy {load_checkpoint_path}")
 
     for tensordict_data in collector:
         iteration_start_time = time.time()
@@ -415,11 +427,11 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
 
         # run evaluation every n episodes
         if (log_iteration > 0 and log_iteration % config.evaluation_interval == 0):
-            evaluate_agents(config, policy, logger, log_iteration, agent_key)
+            evaluate_agents(config, policy, logger, log_iteration, agent_key, device)
 
         # save checkpointed policy every n episodes
         if (log_iteration > 0 and save_policies and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
-            save_policy(policy, log_iteration)
+            save_checkpoint(policy, log_iteration, critic, optim)
 
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time
@@ -447,13 +459,20 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     return policy
 
 
-def save_policy(policy, checkpoint):
+def save_checkpoint(policy, checkpoint, critic, optim):
     """Saves the state dictionary of trained policy."""
-    policy_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
+    checkpoint_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
-    os.makedirs(os.path.dirname(policy_path), exist_ok=True)
-    torch.save(policy.state_dict(), policy_path)
-    print(f"iteration {checkpoint} policy saved to {policy_path}")
+    state = {
+        'iteration': checkpoint,
+        'policy_state_dict': policy.state_dict(),
+        'critic_state_dict': critic.state_dict(),
+        'optimizer_state_dict': optim.state_dict(),
+    }
+
+    torch.save(state, checkpoint_path)
+    print(f"iteration {checkpoint} policy saved to {checkpoint_path}")
 
 
 def record_rollout(policy, config, device, gif_path):
@@ -500,12 +519,16 @@ def record_rollout(policy, config, device, gif_path):
 
 if __name__ == "__main__":
     config = MAPPOConfig()
+    LOAD_POLICY = False
     SAVE_ROLLOUT = False
     SAVE_POLICY = True
     USE_WANDB = True
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     gif_path = f"./rollout_videos/mappo_{config.scenario_name}_{timestamp}_rollout.gif"
+
+    if LOAD_POLICY: load_checkpoint_path = f"./saved_policies/mappo_football_241125_114610/iteration_99_policy.pt"
+    else: load_checkpoint_path = None
 
     vmas_device, device = setup_environment()
     env, agent_key = make_env(config, device, show_specs=False, show_keys=True)
@@ -521,6 +544,7 @@ if __name__ == "__main__":
         vmas_device=vmas_device,
         use_wandb=USE_WANDB,
         save_policies=SAVE_POLICY,
+        load_checkpoint_path=load_checkpoint_path
     )
 
     if SAVE_ROLLOUT: record_rollout(trained_policy, config, device, gif_path)

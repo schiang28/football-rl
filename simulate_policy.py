@@ -112,7 +112,6 @@ def build_mappo_modules(env, config, device, agent_key):
     return policy, None
 
 
-
 def simulate_rollout(policy_path, config, gif_path):
     """Loads policy weights, runs a single episode, and saves the rollout as a GIF."""
     print(f"Starting simulation. Loading policy from: {policy_path}")
