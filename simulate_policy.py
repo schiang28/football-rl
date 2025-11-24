@@ -49,7 +49,7 @@ def setup_environment():
     return vmas_device, device
 
 
-def make_env(config, vmas_device):
+def make_env(config, vmas_device, custom_blue_pos=None, custom_red_pos=None, custom_ball_pos=None):
     """Creates VMAS enviroment for simulation."""
     if config.scenario_name == "football": scenario = config.scenario()
     else: scenario = config.scenario_name
@@ -63,6 +63,9 @@ def make_env(config, vmas_device):
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
+        custom_blue_pos=custom_blue_pos,
+        custom_red_pos=custom_red_pos,
+        custom_ball_pos=custom_ball_pos
     )
 
     agent_key = env.action_keys[0][0]
@@ -112,14 +115,49 @@ def build_mappo_modules(env, config, device, agent_key):
     return policy, None
 
 
-def simulate_rollout(policy_path, config, gif_path):
+def get_custom_positions(start_pos_dict, device):
+    blue_pos = start_pos_dict['blue_pos']
+    red_pos = start_pos_dict['red_pos']
+    ball_pos = start_pos_dict['ball_pos']
+
+    if blue_pos:
+        custom_blue_start = torch.tensor(
+            blue_pos,
+            device=device,
+            dtype=torch.float32
+        )
+    else: custom_blue_start = None
+
+    if red_pos:
+        custom_red_start = torch.tensor(
+            red_pos,
+            device=device,
+            dtype=torch.float32
+        )
+    else: custom_red_start = None
+
+    if ball_pos:
+        custom_ball_start = torch.tensor(
+            ball_pos,
+            device=device,
+            dtype=torch.float32
+        )
+    else: custom_ball_start = None
+
+    return custom_blue_start, custom_red_start, custom_ball_start
+
+
+def simulate_rollout(checkpoint_path, config, gif_path, start_pos_dict):
     """Loads policy weights, runs a single episode, and saves the rollout as a GIF."""
-    print(f"Starting simulation. Loading policy from: {policy_path}")
+    print(f"Starting simulation. Loading policy from: {checkpoint_path}")
 
     vmas_device, device = setup_environment()
-    env, agent_key = make_env(config, vmas_device)
+    custom_blue_pos, custom_red_pos, custom_ball_pos = get_custom_positions(start_pos_dict, device)
+    env, agent_key = make_env(config, vmas_device, custom_blue_pos, custom_red_pos, custom_ball_pos)
     policy, _ = build_mappo_modules(env, config, device, agent_key)
-    policy.load_state_dict(torch.load(policy_path, map_location=device))
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    policy.load_state_dict(checkpoint['policy_state_dict'])
 
     all_frames = []
 
@@ -149,11 +187,17 @@ def simulate_rollout(policy_path, config, gif_path):
 if __name__ == "__main__":
     config = MAPPOConfig()
 
-    experiment = "mappo_football_251118_115119"
-    policy_number = "499"
+    experiment = "mappo_football_241125_115611"
+    policy_number = "180"
 
-    saved_policy_path = f"./saved_policies/{experiment}/iteration_{policy_number}_policy.pt"
+    saved_checkpoint_path = f"./saved_policies/{experiment}/iteration_{policy_number}_policy.pt"
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     gif_path = f"./loaded_policy_rollouts/{experiment}_iter{policy_number}_{timestamp}.gif"
 
-    simulate_rollout(saved_policy_path, config, gif_path)
+    start_pos_dic = {
+        "blue_pos": [[-0.5, 0]],
+        "red_pos": None,
+        "ball_pos": None
+    }
+
+    simulate_rollout(saved_checkpoint_path, config, gif_path, start_pos_dic)

@@ -84,6 +84,11 @@ class FootballDesign(BaseScenario):
         self.observe_adversaries = kwargs.pop("observe_adversaries", True)
         self.dict_obs = kwargs.pop("dict_obs", False)
 
+        # Custom starting position arguments for red, blue, and ball components
+        self.custom_blue_pos = kwargs.pop("custom_blue_pos", None)
+        self.custom_red_pos = kwargs.pop("custom_red_pos", None)
+        self.custom_ball_pos = kwargs.pop("custom_ball_pos", None)
+
         if kwargs.pop("dense_reward_ratio", None) is not None:
             raise ValueError(
                 "dense_reward_ratio in football is deprecated, please use `dense_reward` "
@@ -104,32 +109,18 @@ class FootballDesign(BaseScenario):
         self.init_traj_pts(world)
 
         # Cached values
-        self.left_goal_pos = torch.tensor(
-            [-self.pitch_length / 2 - self.ball_size / 2, 0],
-            device=device,
-            dtype=torch.float,
-        )
+        self.left_goal_pos = torch.tensor([-self.pitch_length / 2 - self.ball_size / 2, 0], device=device, dtype=torch.float)
         self.right_goal_pos = -self.left_goal_pos
         self._done = torch.zeros(batch_dim, device=device, dtype=torch.bool)
-        self._sparse_reward_blue = torch.zeros(
-            batch_dim, device=device, dtype=torch.float32
-        )
+        self._sparse_reward_blue = torch.zeros(batch_dim, device=device, dtype=torch.float32)
         self._sparse_reward_red = self._sparse_reward_blue.clone()
         self._render_field = True
         self.min_agent_dist_to_ball_blue = None
         self.min_agent_dist_to_ball_red = None
 
-        self._reset_agent_range = torch.tensor(
-            [self.pitch_length / 2, self.pitch_width],
-            device=device,
-        )
-        self._reset_agent_offset_blue = torch.tensor(
-            [-self.pitch_length / 2 + self.agent_size, -self.pitch_width / 2],
-            device=device,
-        )
-        self._reset_agent_offset_red = torch.tensor(
-            [-self.agent_size, -self.pitch_width / 2], device=device
-        )
+        self._reset_agent_range = torch.tensor([self.pitch_length / 2, self.pitch_width], device=device)
+        self._reset_agent_offset_blue = torch.tensor([-self.pitch_length / 2 + self.agent_size, -self.pitch_width / 2], device=device)
+        self._reset_agent_offset_red = torch.tensor([-self.agent_size, -self.pitch_width / 2], device=device)
         self._agents_rel_pos_to_ball = None
         return world
 
@@ -213,12 +204,7 @@ class FootballDesign(BaseScenario):
                     else None,
                     u_multiplier=[self.u_multiplier, self.u_multiplier]
                     if not self.enable_shooting
-                    else [
-                        self.u_multiplier,
-                        self.u_multiplier,
-                        self.u_rot_multiplier,
-                        self.u_shoot_multiplier,
-                    ],
+                    else [self.u_multiplier, self.u_multiplier, self.u_rot_multiplier, self.u_shoot_multiplier],
                     max_speed=self.max_speed,
                     dynamics=Holonomic()
                     if not self.enable_shooting
@@ -240,12 +226,7 @@ class FootballDesign(BaseScenario):
                 action_script=self.red_controller.run if self.ai_red_agents else None,
                 u_multiplier=[self.u_multiplier, self.u_multiplier]
                 if not self.enable_shooting or self.ai_red_agents
-                else [
-                    self.u_multiplier,
-                    self.u_multiplier,
-                    self.u_rot_multiplier,
-                    self.u_shoot_multiplier,
-                ],
+                else [self.u_multiplier, self.u_multiplier, self.u_rot_multiplier, self.u_shoot_multiplier],
                 max_speed=self.max_speed,
                 dynamics=Holonomic()
                 if not self.enable_shooting or self.ai_red_agents
@@ -260,15 +241,9 @@ class FootballDesign(BaseScenario):
         world.red_agents = red_agents
 
         for agent in self.blue_agents + self.red_agents:
-            agent.ball_within_angle = torch.zeros(
-                world.batch_dim, device=agent.device, dtype=torch.bool
-            )
-            agent.ball_within_range = torch.zeros(
-                world.batch_dim, device=agent.device, dtype=torch.bool
-            )
-            agent.shoot_force = torch.zeros(
-                world.batch_dim, 2, device=agent.device, dtype=torch.float32
-            )
+            agent.ball_within_angle = torch.zeros(world.batch_dim, device=agent.device, dtype=torch.bool)
+            agent.ball_within_range = torch.zeros(world.batch_dim, device=agent.device, dtype=torch.bool)
+            agent.shoot_force = torch.zeros(world.batch_dim, 2, device=agent.device, dtype=torch.float32)
 
     def get_physically_different_agents(self):
         assert self.n_blue_agents == 5, "Physical differences only for 5 agents"
@@ -310,12 +285,7 @@ class FootballDesign(BaseScenario):
                 action_script=self.blue_controller.run if self.ai_blue_agents else None,
                 u_multiplier=[self.u_multiplier, self.u_multiplier]
                 if not self.enable_shooting
-                else [
-                    self.u_multiplier,
-                    self.u_multiplier,
-                    self.u_rot_multiplier,
-                    self.u_shoot_multiplier,
-                ],
+                else [self.u_multiplier, self.u_multiplier, self.u_rot_multiplier, self.u_shoot_multiplier],
                 max_speed=self.max_speed,
                 dynamics=Holonomic()
                 if not self.enable_shooting
@@ -358,33 +328,31 @@ class FootballDesign(BaseScenario):
         return agents
 
     def reset_agents(self, env_index: int = None):
+        # Set agent custom positions provided
+        if self.custom_blue_pos is not None:
+            for i, agent in enumerate(self.blue_agents):
+                pos = self.custom_blue_pos[i] # pos should be 3d tensor?
+                agent.set_pos(pos, batch_index=env_index)
 
-        if self.spawn_in_formation:
+        elif self.custom_red_pos is not None:
+            for i, agent in enumerate(self.red_agents):
+                pos = self.custom_red_pos[i]
+                agent.set_pos(pos, batch_index=env_index)
+
+        elif self.spawn_in_formation:
             self._spawn_formation(self.blue_agents, True, env_index)
-            if not self.only_blue_formation:
-                self._spawn_formation(self.red_agents, False, env_index)
+            if not self.only_blue_formation: self._spawn_formation(self.red_agents, False, env_index)
         else:
             for agent in self.blue_agents:
                 pos = self._get_random_spawn_position(blue=True, env_index=env_index)
-                agent.set_pos(
-                    pos,
-                    batch_index=env_index,
-                )
-        if (
-            self.spawn_in_formation and self.only_blue_formation
-        ) or not self.spawn_in_formation:
+                agent.set_pos(pos, batch_index=env_index)
+
+        # when to set positions for red agents
+        if (self.spawn_in_formation and self.only_blue_formation) or not self.spawn_in_formation or self.custom_red_pos is None:
             for agent in self.red_agents:
                 pos = self._get_random_spawn_position(blue=False, env_index=env_index)
-                agent.set_pos(
-                    pos,
-                    batch_index=env_index,
-                )
-                agent.set_rot(
-                    torch.tensor(
-                        [torch.pi], device=self.world.device, dtype=torch.float32
-                    ),
-                    batch_index=env_index,
-                )
+                agent.set_pos(pos, batch_index=env_index)
+                agent.set_rot(torch.tensor([torch.pi], device=self.world.device, dtype=torch.float32), batch_index=env_index)
 
     def _spawn_formation(self, agents, blue, env_index):
         if self.randomise_formation_indices:
@@ -399,21 +367,13 @@ class FootballDesign(BaseScenario):
                 break
             if x == 0 or x == endpoint:
                 continue
-            agents_this_column = agents[
-                agent_index : agent_index + self.formation_agents_per_column
-            ]
+            agents_this_column = agents[agent_index : agent_index + self.formation_agents_per_column]
             n_agents_this_column = len(agents_this_column)
 
-            for y in torch.linspace(
-                self.pitch_width / 2,
-                -self.pitch_width / 2,
-                n_agents_this_column + 2,
-            ):
+            for y in torch.linspace(self.pitch_width / 2, -self.pitch_width / 2, n_agents_this_column + 2):
                 if y == -self.pitch_width / 2 or y == self.pitch_width / 2:
                     continue
-                pos = torch.tensor(
-                    [x, y], device=self.world.device, dtype=torch.float32
-                )
+                pos = torch.tensor([x, y], device=self.world.device, dtype=torch.float32)
                 if env_index is None:
                     pos = pos.expand(self.world.batch_dim, self.world.dim_p)
                 agents[agent_index].set_pos(
@@ -467,35 +427,25 @@ class FootballDesign(BaseScenario):
             alpha=1,
             color=Color.BLACK,
         )
-        ball.pos_rew_blue = torch.zeros(
-            world.batch_dim, device=world.device, dtype=torch.float32
-        )
+        ball.pos_rew_blue = torch.zeros(world.batch_dim, device=world.device, dtype=torch.float32)
         ball.pos_rew_red = ball.pos_rew_blue.clone()
         ball.pos_rew_agent_blue = ball.pos_rew_blue.clone()
         ball.pos_rew_agent_red = ball.pos_rew_red.clone()
 
-        ball.kicking_action = torch.zeros(
-            world.batch_dim, world.dim_p, device=world.device, dtype=torch.float32
-        )
+        ball.kicking_action = torch.zeros(world.batch_dim, world.dim_p, device=world.device, dtype=torch.float32)
         world.add_agent(ball)
         world.ball = ball
         self.ball = ball
 
     def reset_ball(self, env_index: int = None):
         if not self.ai_blue_agents:
-            min_agent_dist_to_ball_blue = self.get_closest_agent_to_ball(
-                self.blue_agents, env_index
-            )
+            min_agent_dist_to_ball_blue = self.get_closest_agent_to_ball(self.blue_agents, env_index)
             if env_index is None:
                 self.min_agent_dist_to_ball_blue = min_agent_dist_to_ball_blue
             else:
-                self.min_agent_dist_to_ball_blue[
-                    env_index
-                ] = min_agent_dist_to_ball_blue
+                self.min_agent_dist_to_ball_blue[env_index] = min_agent_dist_to_ball_blue
         if not self.ai_red_agents:
-            min_agent_dist_to_ball_red = self.get_closest_agent_to_ball(
-                self.red_agents, env_index
-            )
+            min_agent_dist_to_ball_red = self.get_closest_agent_to_ball(self.red_agents, env_index)
             if env_index is None:
                 self.min_agent_dist_to_ball_red = min_agent_dist_to_ball_red
             else:
@@ -1094,20 +1044,14 @@ class FootballDesign(BaseScenario):
         # Called with agent=None when only AIs are playing to compute the _done
         if agent is None or agent == self.world.agents[0]:
             # Sparse Reward
-            over_right_line = (
-                self.ball.state.pos[:, X] > self.pitch_length / 2 + self.ball_size / 2
-            )
-            over_left_line = (
-                self.ball.state.pos[:, X] < -self.pitch_length / 2 - self.ball_size / 2
-            )
+            over_right_line = (self.ball.state.pos[:, X] > self.pitch_length / 2 + self.ball_size / 2)
+            over_left_line = (self.ball.state.pos[:, X] < -self.pitch_length / 2 - self.ball_size / 2)
             goal_mask = (self.ball.state.pos[:, Y] <= self.goal_size / 2) * (
                 self.ball.state.pos[:, Y] >= -self.goal_size / 2
             )
             blue_score = over_right_line * goal_mask
             red_score = over_left_line * goal_mask
-            self._sparse_reward_blue = (
-                self.scoring_reward * blue_score - self.scoring_reward * red_score
-            )
+            self._sparse_reward_blue = ( self.scoring_reward * blue_score - self.scoring_reward * red_score)
             self._sparse_reward_red = -self._sparse_reward_blue
 
             self._done = blue_score | red_score
@@ -1645,9 +1589,7 @@ def ball_action_script(ball, world):
     dist_action = torch.stack([left - right, lower - upper], dim=1)
     vel_action = torch.stack([horizontal_vel, vertical_vel], dim=1)
     actions = dist_action * vel_action * impulse
-    goal_mask = (ball.state.pos[:, 1] < world.goal_size / 2) * (
-        ball.state.pos[:, 1] > -world.goal_size / 2
-    )
+    goal_mask = (ball.state.pos[:, 1] < world.goal_size / 2) * ( ball.state.pos[:, 1] > -world.goal_size / 2)
     actions[goal_mask, 0] = 0
     ball.action.u = actions
 
@@ -1656,14 +1598,7 @@ def ball_action_script(ball, world):
 
 
 class AgentPolicy:
-    def __init__(
-        self,
-        team: str,
-        speed_strength=1.0,
-        decision_strength=1.0,
-        precision_strength=1.0,
-        disabled: bool = False,
-    ):
+    def __init__(self, team: str, speed_strength=1.0, decision_strength=1.0, precision_strength=1.0, disabled: bool = False):
         self.team_name = team
         self.otherteam_name = "Blue" if (self.team_name == "Red") else "Red"
 
