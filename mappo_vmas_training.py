@@ -86,7 +86,7 @@ def setup_environment():
     return vmas_device, device
 
 
-def make_env(config, vmas_device, show_specs, show_keys):
+def make_env(config, vmas_device, asymmetries, show_specs, show_keys):
     """Creates VMAS enviroment and applies transformations."""
     if config.scenario_name == "football": scenario = config.scenario()
     else: scenario = config.scenario_name
@@ -100,6 +100,8 @@ def make_env(config, vmas_device, show_specs, show_keys):
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
+        mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
+        mask_pitch_rhs=asymmetries["mask_pitch_rhs"]
     )
 
     if show_specs:
@@ -317,7 +319,7 @@ def log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iter
     logger.experiment.log({f"eval/video": wandb.Video(video, fps=1 / eval_env.world.dt, format="mp4")}, commit=False)
 
 
-def evaluate_agents(config, policy, logger, log_iteration, agent_key, device):
+def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, asymmetries):
     """Evalute agents using current policy and log relevant evaluation metrics."""
     if config.scenario_name == "football": scenario = config.scenario()
     else: scenario = config.scenario_name
@@ -332,6 +334,8 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device):
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
         render_mode="rgb_array",
+        mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
+        mask_pitch_rhs=asymmetries["mask_pitch_rhs"]
     )
 
     evaluation_start_time = time.time()
@@ -350,7 +354,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device):
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
-def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, load_checkpoint_path=None):
+def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, load_checkpoint_path=None):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -427,7 +431,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
 
         # run evaluation every n episodes
         if (log_iteration > 0 and log_iteration % config.evaluation_interval == 0):
-            evaluate_agents(config, policy, logger, log_iteration, agent_key, device)
+            evaluate_agents(config, policy, logger, log_iteration, agent_key, device, asymmetries)
 
         # save checkpointed policy every n episodes
         if (log_iteration > 0 and save_policies and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
@@ -521,8 +525,13 @@ if __name__ == "__main__":
     config = MAPPOConfig()
     LOAD_POLICY = False
     SAVE_ROLLOUT = False
-    SAVE_POLICY = True
+    SAVE_POLICY = False
     USE_WANDB = True
+
+    asymmetries = {
+        "mask_pitch_lhs": False,
+        "mask_pitch_rhs": True,
+    }
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     gif_path = f"./rollout_videos/mappo_{config.scenario_name}_{timestamp}_rollout.gif"
@@ -531,7 +540,7 @@ if __name__ == "__main__":
     else: load_checkpoint_path = None
 
     vmas_device, device = setup_environment()
-    env, agent_key = make_env(config, device, show_specs=False, show_keys=True)
+    env, agent_key = make_env(config, device, asymmetries, show_specs=False, show_keys=True)
     policy, critic = build_mappo_modules(env, config, device, agent_key)
     
     trained_policy = train_mappo(
@@ -542,6 +551,7 @@ if __name__ == "__main__":
         agent_key=agent_key,
         device=device,
         vmas_device=vmas_device,
+        asymmetries=asymmetries,
         use_wandb=USE_WANDB,
         save_policies=SAVE_POLICY,
         load_checkpoint_path=load_checkpoint_path

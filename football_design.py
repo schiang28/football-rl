@@ -89,6 +89,11 @@ class FootballDesign(BaseScenario):
         self.custom_red_pos = kwargs.pop("custom_red_pos", None)
         self.custom_ball_pos = kwargs.pop("custom_ball_pos", None)
 
+        # Masking mechanism
+        self.mask_pitch_lhs = kwargs.pop("mask_pitch_lhs", False)
+        self.mask_pitch_rhs = kwargs.pop("mask_pitch_rhs", False)
+
+
         if kwargs.pop("dense_reward_ratio", None) is not None:
             raise ValueError(
                 "dense_reward_ratio in football is deprecated, please use `dense_reward` "
@@ -1287,19 +1292,43 @@ class FootballDesign(BaseScenario):
         ) = input
         #  End rendering code
 
-        if (
-            not blue
-        ):  # If agent is red we have to flip the x of sign of each observation
+
+        # apply masking mechanism to blue agent observations
+        if blue and (self.mask_pitch_lhs or self.mask_pitch_rhs):
+            OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
+            ZERO_VEL = torch.zeros_like(ball_vel)
+
+            # initially all tensor all false, then bitwise or with lhs or rhs
+            mask_ball = torch.zeros_like(ball_pos[..., X], dtype=torch.bool)
+            if self.mask_pitch_lhs: mask_ball = mask_ball | (ball_pos[..., X] < 0.0)
+            if self.mask_pitch_rhs: mask_ball = mask_ball | (ball_pos[..., X] > 0.0)
+            
+            # apply mask to ball position and velocity using arbitary tensors
+            mask_ball = mask_ball.unsqueeze(-1)
+            ball_pos = torch.where(mask_ball, OUT_OF_BOUNDS_POS, ball_pos)
+            ball_vel = torch.where(mask_ball, ZERO_VEL, ball_vel)
+
+            # apply mask to red agents
+            new_adversary_poses, new_adversary_vels = [], []
+            for adv_pos, adv_vel in zip(adversary_poses, adversary_vels):
+                mask_adv = torch.zeros_like(adv_pos[..., X], dtype=torch.bool)
+                if self.mask_pitch_lhs: mask_adv = mask_adv | (adv_pos[..., X] < 0.0)
+                if self.mask_pitch_rhs: mask_adv = mask_adv | (adv_pos[..., X] > 0.0)
+                mask_adv = mask_adv.unsqueeze(-1)
+                
+                adv_pos = torch.where(mask_adv, OUT_OF_BOUNDS_POS, adv_pos)
+                adv_vel = torch.where(mask_adv, ZERO_VEL, adv_vel)
+                new_adversary_poses.append(adv_pos)
+                new_adversary_vels.append(adv_vel)
+                
+            adversary_poses = new_adversary_poses
+            adversary_vels = new_adversary_vels
+
+
+        # If agent is red we have to flip the x of sign of each observation
+        if (not blue):  
             for tensor in (
-                [
-                    agent_pos,
-                    agent_vel,
-                    agent_force,
-                    ball_pos,
-                    ball_vel,
-                    ball_force,
-                    goal_pos,
-                ]
+                [ agent_pos, agent_vel, agent_force, ball_pos, ball_vel, ball_force, goal_pos, ]
                 + teammate_poses
                 + teammate_forces
                 + teammate_vels
@@ -1309,71 +1338,30 @@ class FootballDesign(BaseScenario):
             ):
                 tensor[..., X] = -tensor[..., X]
             agent_rot = agent_rot - torch.pi
+
         obs = {
-            "obs": [
-                agent_force,
-                agent_pos - ball_pos,
-                agent_vel - ball_vel,
-                ball_pos - goal_pos,
-                ball_vel,
-                ball_force,
-            ],
+            "obs": [agent_force, agent_pos - ball_pos, agent_vel - ball_vel, ball_pos - goal_pos, ball_vel, ball_force],
             "pos": [agent_pos - goal_pos],
             "vel": [agent_vel],
         }
-        if self.enable_shooting:
-            obs["obs"].append(agent_rot)
+
+        if self.enable_shooting: obs["obs"].append(agent_rot)
 
         if self.observe_adversaries and len(adversary_poses):
             obs["adversaries"] = []
-            for adversary_pos, adversary_force, adversary_vel in zip(
-                adversary_poses, adversary_forces, adversary_vels
-            ):
-                obs["adversaries"].append(
-                    torch.cat(
-                        [
-                            agent_pos - adversary_pos,
-                            agent_vel - adversary_vel,
-                            adversary_vel,
-                            adversary_force,
-                        ],
-                        dim=-1,
-                    )
-                )
-            obs["adversaries"] = [
-                torch.stack(obs["adversaries"], dim=-2)
-                if self.dict_obs
-                else torch.cat(obs["adversaries"], dim=-1)
-            ]
+            for adversary_pos, adversary_force, adversary_vel in zip(adversary_poses, adversary_forces, adversary_vels):
+                obs["adversaries"].append(torch.cat([agent_pos - adversary_pos, agent_vel - adversary_vel, adversary_vel, adversary_force,], dim=-1,))
+            obs["adversaries"] = [torch.stack(obs["adversaries"], dim=-2) if self.dict_obs else torch.cat(obs["adversaries"], dim=-1)]
 
         if self.observe_teammates:
             obs["teammates"] = []
-            for teammate_pos, teammate_force, teammate_vel in zip(
-                teammate_poses, teammate_forces, teammate_vels
-            ):
-                obs["teammates"].append(
-                    torch.cat(
-                        [
-                            agent_pos - teammate_pos,
-                            agent_vel - teammate_vel,
-                            teammate_vel,
-                            teammate_force,
-                        ],
-                        dim=-1,
-                    )
-                )
-            obs["teammates"] = [
-                torch.stack(obs["teammates"], dim=-2)
-                if self.dict_obs
-                else torch.cat(obs["teammates"], dim=-1)
-            ]
+            for teammate_pos, teammate_force, teammate_vel in zip(teammate_poses, teammate_forces, teammate_vels):
+                obs["teammates"].append(torch.cat([agent_pos - teammate_pos, agent_vel - teammate_vel, teammate_vel, teammate_force, ], dim=-1,))
+            obs["teammates"] = [torch.stack(obs["teammates"], dim=-2) if self.dict_obs else torch.cat(obs["teammates"], dim=-1)]
 
-        for key, value in obs.items():
-            obs[key] = torch.cat(value, dim=-1)
-        if self.dict_obs:
-            return obs
-        else:
-            return torch.cat(list(obs.values()), dim=-1)
+        for key, value in obs.items(): obs[key] = torch.cat(value, dim=-1)
+        if self.dict_obs: return obs
+        else: return torch.cat(list(obs.values()), dim=-1)
 
     def done(self):
         if self.ai_blue_agents and self.ai_red_agents:
