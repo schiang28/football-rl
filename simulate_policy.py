@@ -2,6 +2,7 @@ import torch
 import imageio
 import os
 import datetime
+import numpy as np
 
 from tensordict.nn import set_composite_lp_aggregate, TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
@@ -36,6 +37,10 @@ class MAPPOConfig:
     # Evaluation
     explore = False
 
+
+
+def rendering_callback(env, td):
+    env.frames.append(env.render(mode="rgb_array", visualize_when_rgb=False))
 
 
 def setup_environment():
@@ -159,28 +164,62 @@ def simulate_rollout(checkpoint_path, config, gif_path, start_pos_dict):
     checkpoint = torch.load(checkpoint_path, map_location=device)
     policy.load_state_dict(checkpoint['policy_state_dict'])
 
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+        env.frames = []
+
+        rollouts = env.rollout(
+            max_steps=config.max_steps,
+            policy=policy,
+            callback=rendering_callback,
+            break_when_any_done=False
+        )
+
+    frames_list = env.frames[:rollouts.batch_size[1]]
+    os.makedirs(os.path.dirname(gif_path), exist_ok=True)
+    imageio.mimsave(gif_path, frames_list, fps=20)
+
+    print(f"GIF saved to: {gif_path}")
+
+
+def record_rollout(policy, config, device, gif_path):
+    """Runs a single episode rollout using policy and saves it as a GIF. Used to be in training script (not used currently)"""
+    if config.scenario_name == "football": scenario = config.scenario()
+    else: config.scenario_name
+
+    record_env = VmasEnv(
+        scenario=scenario,
+        num_envs=1,
+        continuous_actions=True,
+        max_steps=config.max_steps,
+        device=device,
+        n_blue_agents=config.b_agents,
+        n_red_agents=config.r_agents,
+        observe_teammates=config.observe_teammates,
+    )
+
+    record_env = TransformedEnv(record_env) 
     all_frames = []
 
-    with torch.no_grad(), set_exploration_type(ExplorationType.RANDOM):
-        td = env.reset()
+    with torch.no_grad():
+        td = record_env.reset()
         dones = td.get("done", torch.zeros(1,1, dtype=torch.bool, device=device))
-
-        for step in range(config.max_steps):
+        
+        for _ in range(config.max_steps - 1):
             if dones.all():
-                print(f"Episode ended early at step {step}/{config.max_steps}.")
+                print("episode ended early")
                 break
 
-            td = policy(td)
-            td = env.step(td)
-            frame = env.render(mode="rgb_array")
+            td = policy(td) 
+            td = record_env.step(td)
+            frame = record_env.render(mode="rgb_array")
             all_frames.append(frame)
             dones = td.get("done", torch.zeros(1,1, dtype=torch.bool, device=device))
-
-        env.close()
+            
+        record_env.close()
 
     os.makedirs(os.path.dirname(gif_path), exist_ok=True)
     imageio.mimsave(gif_path, all_frames, fps=30)
-    print(f"GIF saved to: {gif_path}")
+    print(f"rollout gif saved to {gif_path}")
 
 
 
@@ -195,7 +234,7 @@ if __name__ == "__main__":
     gif_path = f"./loaded_policy_rollouts/{experiment}_iter{policy_number}_{timestamp}.gif"
 
     start_pos_dic = {
-        "blue_pos": [[-0.5, 0]],
+        "blue_pos": None, #[[-0.5, 0]],
         "red_pos": None,
         "ball_pos": None
     }

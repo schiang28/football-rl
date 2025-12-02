@@ -479,52 +479,10 @@ def save_checkpoint(policy, checkpoint, critic, optim, timestamp):
     print(f"iteration {checkpoint} policy saved to {checkpoint_path}")
 
 
-def record_rollout(policy, config, device, gif_path):
-    """Runs a single episode rollout using policy and saves it as a GIF."""
-    if config.scenario_name == "football": scenario = config.scenario()
-    else: config.scenario_name
-
-    record_env = VmasEnv(
-        scenario=scenario,
-        num_envs=1,
-        continuous_actions=True,
-        max_steps=config.max_steps,
-        device=device,
-        n_blue_agents=config.b_agents,
-        n_red_agents=config.r_agents,
-        observe_teammates=config.observe_teammates,
-    )
-
-    record_env = TransformedEnv(record_env) 
-    all_frames = []
-
-    with torch.no_grad():
-        td = record_env.reset()
-        dones = td.get("done", torch.zeros(1,1, dtype=torch.bool, device=device))
-        
-        for _ in range(config.max_steps - 1):
-            if dones.all():
-                print("episode ended early")
-                break
-
-            td = policy(td) 
-            td = record_env.step(td)
-            frame = record_env.render(mode="rgb_array")
-            all_frames.append(frame)
-            dones = td.get("done", torch.zeros(1,1, dtype=torch.bool, device=device))
-            
-        record_env.close()
-
-    os.makedirs(os.path.dirname(gif_path), exist_ok=True)
-    imageio.mimsave(gif_path, all_frames, fps=30)
-    print(f"rollout gif saved to {gif_path}")
-
-
 
 if __name__ == "__main__":
     config = MAPPOConfig()
     LOAD_POLICY = False
-    SAVE_ROLLOUT = True
     SAVE_POLICY = True
     USE_WANDB = True
 
@@ -534,7 +492,6 @@ if __name__ == "__main__":
     }
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
-    gif_path = f"./rollout_videos/mappo_{config.scenario_name}_{timestamp}_rollout.gif"
 
     if LOAD_POLICY: load_checkpoint_path = f"./saved_policies/mappo_football_241125_114610/iteration_99_policy.pt"
     else: load_checkpoint_path = None
@@ -557,5 +514,3 @@ if __name__ == "__main__":
         save_policies=SAVE_POLICY,
         load_checkpoint_path=load_checkpoint_path
     )
-
-    if SAVE_ROLLOUT: record_rollout(trained_policy, config, device, gif_path)
