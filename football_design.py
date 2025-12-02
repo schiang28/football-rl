@@ -73,10 +73,8 @@ class FootballDesign(BaseScenario):
         # Rewards
         self.dense_reward = kwargs.pop("dense_reward", True)
         self.pos_shaping_factor_ball_goal = kwargs.pop("pos_shaping_factor_ball_goal", 10.0)  # Reward for moving the ball towards the opponents' goal. This can be annealed in a curriculum.
-        self.pos_shaping_factor_agent_ball = kwargs.pop("pos_shaping_factor_agent_ball", 0.1)  # Reward for moving the closest agent to the ball in a team closer to it.
-        # This is useful for exploration and can be annealed in a curriculum.
-        # This reward does not trigger if the agent is less than distance_to_ball_trigger from the ball or the ball is moving
-        self.distance_to_ball_trigger = kwargs.pop("distance_to_ball_trigger", 0.4)
+        self.pos_shaping_factor_agent_ball = kwargs.pop("pos_shaping_factor_agent_ball", 0.1)  # Reward for moving the closest agent to the ball in a team closer to it.  # Useful for exploration and can be annealed in a curriculum.
+        self.distance_to_ball_trigger = kwargs.pop("distance_to_ball_trigger", 0.4) # This reward does not trigger if the agent is less than distance_to_ball_trigger from the ball or the ball is moving
         self.scoring_reward = kwargs.pop("scoring_reward", 100.0)  # Discrete reward for scoring
 
         # Observations

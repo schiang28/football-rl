@@ -18,7 +18,7 @@ from football_design import FootballDesign
 
 class MAPPOConfig:
     # Environment
-    max_steps = 50 # max no. timesteps per episode
+    max_steps = 500 # max no. timesteps per episode
     scenario_name = "football"
     scenario = FootballDesign
     b_agents = 1
@@ -161,7 +161,7 @@ def simulate_rollout(checkpoint_path, config, gif_path, start_pos_dict):
 
     all_frames = []
 
-    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+    with torch.no_grad(), set_exploration_type(ExplorationType.RANDOM):
         td = env.reset()
         dones = td.get("done", torch.zeros(1,1, dtype=torch.bool, device=device))
 
@@ -187,8 +187,8 @@ def simulate_rollout(checkpoint_path, config, gif_path, start_pos_dict):
 if __name__ == "__main__":
     config = MAPPOConfig()
 
-    experiment = "mappo_football_241125_115611"
-    policy_number = "180"
+    experiment = "mappo_football_011225_195207"
+    policy_number = "499"
 
     saved_checkpoint_path = f"./saved_policies/{experiment}/iteration_{policy_number}_policy.pt"
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")

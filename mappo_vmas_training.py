@@ -32,7 +32,7 @@ os.environ["PYGLET_HEADLESS"] = "true"
 
 class MAPPOConfig:
     # Environment
-    max_steps = 100 # max no. timesteps per episode (def. 500)
+    max_steps = 500 # max no. timesteps per episode (def. 500)
     scenario_name = "football"
     scenario = FootballDesign
     b_agents = 1
@@ -48,29 +48,30 @@ class MAPPOConfig:
     depth = 2 # no. hidden layer in policy/value networks
 
     # Collector
-    n_iters = 100 # no. of training iterations (def. 500)
-    frames_per_batch = 10_000  # total timesteps across episodes in one batch per iteration
+    n_iters = 500 # no. of training iterations (def. 500)
+    frames_per_batch = 240_000  # total timesteps across episodes in one batch per iteration (def 240,000)
     num_vmas_envs = frames_per_batch // max_steps
 
     # Loss
     normalize_advantage = True
     gamma = 0.99
     lmbda = 0.9
-    entropy_eps = 3e-4
+    entropy_eps = 0.005 # 0.005
     clip_epsilon = 0.2  # clip value for PPO loss
 
     # Training
-    num_epochs = 20  # no. of optimisation steps per training iteration
-    minibatch_size = 512  # no. samples processed per optimisation step
+    num_epochs = 45  # no. of optimisation steps per training iteration (def. 45)
+    minibatch_size = 4096  # no. samples processed per optimisation step (def. 4096)
     lr = 5e-5 # learning rate (def. 5e-5)
     max_grad_norm = 5.0  # maximum norm for the gradients
 
     # Evaluation
-    evaluation_interval = n_iters // 10
+    num_evaluations = 10
+    evaluation_interval = n_iters // num_evaluations
     explore = False
 
     # Checkpoints
-    num_checkpoints = 5 # how many policies will be saved during training
+    num_checkpoints = 10 # how many policies will be saved during training
     checkpoint_interval = n_iters // num_checkpoints
 
 
@@ -226,10 +227,9 @@ def create_loss(config, env, policy, critic, agent_key):
     return loss_module
 
 
-def setup_loggers(config, use_wandb):
+def setup_loggers(config, use_wandb, timestamp):
     """Setup tqdm logger and WanDB logger if used."""
     if use_wandb:
-        timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
         logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
     else:
         logger = DummyLogger()  
@@ -354,7 +354,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
-def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, load_checkpoint_path=None):
+def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, load_checkpoint_path=None):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -364,7 +364,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     loss_module = create_loss(config, env, policy, critic, agent_key)
 
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
-    logger, pbar = setup_loggers(config, use_wandb)
+    logger, pbar = setup_loggers(config, use_wandb, timestamp)
 
     log_iteration = 0
     total_time = 0
@@ -435,7 +435,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
 
         # save checkpointed policy every n episodes
         if (log_iteration > 0 and save_policies and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
-            save_checkpoint(policy, log_iteration, critic, optim)
+            save_checkpoint(policy, log_iteration, critic, optim, timestamp)
 
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time
@@ -463,7 +463,7 @@ def train_mappo(config, env, policy, critic, agent_key, device, vmas_device, use
     return policy
 
 
-def save_checkpoint(policy, checkpoint, critic, optim):
+def save_checkpoint(policy, checkpoint, critic, optim, timestamp):
     """Saves the state dictionary of trained policy."""
     checkpoint_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
@@ -524,13 +524,13 @@ def record_rollout(policy, config, device, gif_path):
 if __name__ == "__main__":
     config = MAPPOConfig()
     LOAD_POLICY = False
-    SAVE_ROLLOUT = False
-    SAVE_POLICY = False
+    SAVE_ROLLOUT = True
+    SAVE_POLICY = True
     USE_WANDB = True
 
     asymmetries = {
         "mask_pitch_lhs": False,
-        "mask_pitch_rhs": True,
+        "mask_pitch_rhs": False,
     }
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
@@ -544,6 +544,7 @@ if __name__ == "__main__":
     policy, critic = build_mappo_modules(env, config, device, agent_key)
     
     trained_policy = train_mappo(
+        timetamp=timestamp,
         config=config,
         env=env,
         policy=policy,
