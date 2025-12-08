@@ -227,9 +227,11 @@ def create_loss(config, env, policy, critic, agent_key):
     return loss_module
 
 
-def setup_loggers(config, use_wandb, timestamp):
+def setup_loggers(config, use_wandb, timestamp, local):
     """Setup tqdm logger and WanDB logger if used."""
-    if use_wandb:
+    if use_wandb and local:
+        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="fb_mappo_tests", log_dir="./wandb_logs")
+    elif use_wandb and not local:
         logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
     else:
         logger = DummyLogger()  
@@ -354,7 +356,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
-def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, load_checkpoint_path=None):
+def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, load_checkpoint_path=None):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -364,7 +366,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
     loss_module = create_loss(config, env, policy, critic, agent_key)
 
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
-    logger, pbar = setup_loggers(config, use_wandb, timestamp)
+    logger, pbar = setup_loggers(config, use_wandb, timestamp, local)
 
     log_iteration = 0
     total_time = 0
@@ -434,7 +436,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
             evaluate_agents(config, policy, logger, log_iteration, agent_key, device, asymmetries)
 
         # save checkpointed policy every n episodes
-        if (log_iteration > 0 and save_policies and (log_iteration % config.checkpoint_interval == 0 or log_iteration + 1 == config.n_iters)):
+        if (log_iteration > 0 and save_policies and ((log_iteration % config.checkpoint_interval == 0) or (log_iteration + 1 == config.n_iters))):
             save_checkpoint(policy, log_iteration, critic, optim, timestamp)
 
         training_time = iteration_end_time - training_start_time
@@ -463,9 +465,10 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
     return policy
 
 
-def save_checkpoint(policy, checkpoint, critic, optim, timestamp):
+def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local):
     """Saves the state dictionary of trained policy."""
-    checkpoint_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
+    if local: checkpoint_path = f"./test_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
+    else: checkpoint_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
     state = {
@@ -483,25 +486,32 @@ def save_checkpoint(policy, checkpoint, critic, optim, timestamp):
 if __name__ == "__main__":
     config = MAPPOConfig()
     LOAD_POLICY = False
-    SAVE_POLICY = True
+    SAVE_POLICY = False
     USE_WANDB = True
+    LOCAL = True
 
     asymmetries = {
-        "mask_pitch_lhs": False,
+        "mask_pitch_lhs": True,
         "mask_pitch_rhs": False,
     }
 
-    timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
+    if LOCAL:
+        config.n_iters = 100
+        config.max_steps = 100
+        config.frames_per_batch = 48000
+        config.num_epochs = 10
+        config.minibatch_size = 128
 
     if LOAD_POLICY: load_checkpoint_path = f"./saved_policies/mappo_football_241125_114610/iteration_99_policy.pt"
     else: load_checkpoint_path = None
 
+    timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     vmas_device, device = setup_environment()
     env, agent_key = make_env(config, device, asymmetries, show_specs=False, show_keys=True)
     policy, critic = build_mappo_modules(env, config, device, agent_key)
     
     trained_policy = train_mappo(
-        timetamp=timestamp,
+        timestamp=timestamp,
         config=config,
         env=env,
         policy=policy,
@@ -512,5 +522,6 @@ if __name__ == "__main__":
         asymmetries=asymmetries,
         use_wandb=USE_WANDB,
         save_policies=SAVE_POLICY,
+        local=LOCAL,
         load_checkpoint_path=load_checkpoint_path
     )

@@ -2,7 +2,6 @@ import torch
 import imageio
 import os
 import datetime
-import numpy as np
 
 from tensordict.nn import set_composite_lp_aggregate, TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
@@ -163,6 +162,7 @@ def simulate_rollout(checkpoint_path, config, gif_path, start_pos_dict):
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     policy.load_state_dict(checkpoint['policy_state_dict'])
+    policy.eval()
 
     with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
         env.frames = []

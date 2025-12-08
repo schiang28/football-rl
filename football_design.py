@@ -85,7 +85,7 @@ class FootballDesign(BaseScenario):
         # Custom starting position arguments for red, blue, and ball components
         self.custom_blue_pos = kwargs.pop("custom_blue_pos", None)
         self.custom_red_pos = kwargs.pop("custom_red_pos", None)
-        self.custom_ball_pos = kwargs.pop("custom_ball_pos", None)
+        self.custom_ball_pos = kwargs.pop("custom_ball_pos", None) # currently not implemented, may be useful
 
         # Masking mechanism
         self.mask_pitch_lhs = kwargs.pop("mask_pitch_lhs", False)
@@ -331,7 +331,7 @@ class FootballDesign(BaseScenario):
         return agents
 
     def reset_agents(self, env_index: int = None):
-        # Set agent custom positions provided
+        # Set agent custom positions that are provided (red or blue agents)
         if self.custom_blue_pos is not None:
             for i, agent in enumerate(self.blue_agents):
                 pos = self.custom_blue_pos[i] # pos should be 3d tensor?
@@ -1049,52 +1049,42 @@ class FootballDesign(BaseScenario):
             # Sparse Reward
             over_right_line = (self.ball.state.pos[:, X] > self.pitch_length / 2 + self.ball_size / 2)
             over_left_line = (self.ball.state.pos[:, X] < -self.pitch_length / 2 - self.ball_size / 2)
-            goal_mask = (self.ball.state.pos[:, Y] <= self.goal_size / 2) * (
-                self.ball.state.pos[:, Y] >= -self.goal_size / 2
-            )
+            goal_mask = (self.ball.state.pos[:, Y] <= self.goal_size / 2) * ( self.ball.state.pos[:, Y] >= -self.goal_size / 2)
+
+            # does agent score minus if opposing agent scores
             blue_score = over_right_line * goal_mask
             red_score = over_left_line * goal_mask
-            self._sparse_reward_blue = ( self.scoring_reward * blue_score - self.scoring_reward * red_score)
+            self._sparse_reward_blue = (self.scoring_reward * blue_score - self.scoring_reward * red_score)
             self._sparse_reward_red = -self._sparse_reward_blue
-
             self._done = blue_score | red_score
+
             # Dense Reward
             self._dense_reward_blue = 0
             self._dense_reward_red = 0
             if self.dense_reward and agent is not None:
                 if not self.ai_blue_agents:
-                    self._dense_reward_blue = self.reward_ball_to_goal(
-                        blue=True
-                    ) + self.reward_all_agent_to_ball(blue=True)
+                    self._dense_reward_blue = self.reward_ball_to_goal(blue=True) + self.reward_all_agent_to_ball(blue=True)
                 if not self.ai_red_agents:
-                    self._dense_reward_red = self.reward_ball_to_goal(
-                        blue=False
-                    ) + self.reward_all_agent_to_ball(blue=False)
+                    self._dense_reward_red = self.reward_ball_to_goal(blue=False) + self.reward_all_agent_to_ball(blue=False)
 
         blue = agent in self.blue_agents
-        if blue:
-            reward = self._sparse_reward_blue + self._dense_reward_blue
-        else:
-            reward = self._sparse_reward_red + self._dense_reward_red
+        if blue: reward = self._sparse_reward_blue + self._dense_reward_blue
+        else: reward = self._sparse_reward_red + self._dense_reward_red
 
         return reward
 
     def reward_ball_to_goal(self, blue: bool):
+        # distance from ball to opposing goal and scale by shaping factor
         if blue:
-            self.ball.distance_to_goal_blue = torch.linalg.vector_norm(
-                self.ball.state.pos - self.right_goal_pos,
-                dim=-1,
-            )
+            self.ball.distance_to_goal_blue = torch.linalg.vector_norm(self.ball.state.pos - self.right_goal_pos, dim=-1,)
             distance_to_goal = self.ball.distance_to_goal_blue
         else:
-            self.ball.distance_to_goal_red = torch.linalg.vector_norm(
-                self.ball.state.pos - self.left_goal_pos,
-                dim=-1,
-            )
+            self.ball.distance_to_goal_red = torch.linalg.vector_norm(self.ball.state.pos - self.left_goal_pos, dim=-1,)
             distance_to_goal = self.ball.distance_to_goal_red
 
         pos_shaping = distance_to_goal * self.pos_shaping_factor_ball_goal
 
+        # reward using the difference and change between current and previous distance
         if blue:
             self.ball.pos_rew_blue = self.ball.pos_shaping_blue - pos_shaping
             self.ball.pos_shaping_blue = pos_shaping
@@ -1106,13 +1096,10 @@ class FootballDesign(BaseScenario):
         return pos_rew
 
     def reward_all_agent_to_ball(self, blue: bool):
-        min_dist_to_ball = self.get_closest_agent_to_ball(
-            team=self.blue_agents if blue else self.red_agents, env_index=None
-        )
-        if blue:
-            self.min_agent_dist_to_ball_blue = min_dist_to_ball
-        else:
-            self.min_agent_dist_to_ball_red = min_dist_to_ball
+        # incentivises closest agent to move towards the ball
+        min_dist_to_ball = self.get_closest_agent_to_ball(team=self.blue_agents if blue else self.red_agents, env_index=None)
+        if blue: self.min_agent_dist_to_ball_blue = min_dist_to_ball
+        else: self.min_agent_dist_to_ball_red = min_dist_to_ball
         pos_shaping = min_dist_to_ball * self.pos_shaping_factor_agent_ball
 
         ball_moving = torch.linalg.vector_norm(self.ball.state.vel, dim=-1) > 1e-6
@@ -1156,10 +1143,8 @@ class FootballDesign(BaseScenario):
         blue=None,
         env_index=Ellipsis,
     ):
-        if blue:
-            assert agent in self.blue_agents
-        else:
-            blue = agent in self.blue_agents
+        if blue: assert agent in self.blue_agents
+        else: blue = agent in self.blue_agents
 
         if not blue:
             my_team, other_team = (self.red_agents, self.blue_agents)
@@ -1195,65 +1180,65 @@ class FootballDesign(BaseScenario):
             goal_pos=goal_pos,
             ball_pos=self.ball.state.pos[env_index] if ball_pos is None else ball_pos,
             ball_vel=self.ball.state.vel[env_index] if ball_vel is None else ball_vel,
-            ball_force=self.ball.state.force[env_index]
-            if ball_force is None
-            else ball_force,
-            adversary_poses=actual_adversary_poses
-            if adversary_poses is None
-            else adversary_poses,
-            adversary_forces=actual_adversary_forces
-            if adversary_forces is None
-            else adversary_forces,
-            adversary_vels=actual_adversary_vels
-            if adversary_vels is None
-            else adversary_vels,
-            teammate_poses=actual_teammate_poses
-            if teammate_poses is None
-            else teammate_poses,
-            teammate_forces=actual_teammate_forces
-            if teammate_forces is None
-            else teammate_forces,
-            teammate_vels=actual_teammate_vels
-            if teammate_vels is None
-            else teammate_vels,
+            ball_force=self.ball.state.force[env_index] if ball_force is None else ball_force,
+            adversary_poses=actual_adversary_poses if adversary_poses is None else adversary_poses,
+            adversary_forces=actual_adversary_forces if adversary_forces is None else adversary_forces,
+            adversary_vels=actual_adversary_vels if adversary_vels is None else adversary_vels,
+            teammate_poses=actual_teammate_poses if teammate_poses is None else teammate_poses,
+            teammate_forces=actual_teammate_forces if teammate_forces is None else teammate_forces,
+            teammate_vels=actual_teammate_vels if teammate_vels is None else teammate_vels,
             blue=blue,
         )
         return obs
 
-    def observation_base(
-        self,
-        agent_pos,
-        agent_rot,
-        agent_vel,
-        agent_force,
-        teammate_poses,
-        teammate_forces,
-        teammate_vels,
-        adversary_poses,
-        adversary_forces,
-        adversary_vels,
-        ball_pos,
-        ball_vel,
-        ball_force,
-        goal_pos,
+
+    def get_masked_pitch_observation(self, ball_pos, ball_vel, adversary_poses, adversary_vels):
+        OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
+        ZERO_VEL = torch.zeros_like(ball_vel)
+
+        # initially all tensor all false, then bitwise or with lhs or rhs
+        mask_ball = torch.zeros_like(ball_pos[..., X], dtype=torch.bool)
+        if self.mask_pitch_lhs: mask_ball = mask_ball | (ball_pos[..., X] < -1.0)
+        if self.mask_pitch_rhs: mask_ball = mask_ball | (ball_pos[..., X] > 0.0)
+        
+        # apply mask to ball position and velocity using arbitary tensors
+        mask_ball = mask_ball.unsqueeze(-1)
+        ball_pos = torch.where(mask_ball, OUT_OF_BOUNDS_POS, ball_pos)
+        ball_vel = torch.where(mask_ball, ZERO_VEL, ball_vel)
+
+        # apply mask to red agents (the adversary team)
+        new_adversary_poses, new_adversary_vels = [], []
+        for adv_pos, adv_vel in zip(adversary_poses, adversary_vels):
+            mask_adv = torch.zeros_like(adv_pos[..., X], dtype=torch.bool)
+            if self.mask_pitch_lhs: mask_adv = mask_adv | (adv_pos[..., X] < -1.0)
+            if self.mask_pitch_rhs: mask_adv = mask_adv | (adv_pos[..., X] > 0.0)
+            mask_adv = mask_adv.unsqueeze(-1)
+            
+            adv_pos = torch.where(mask_adv, OUT_OF_BOUNDS_POS, adv_pos)
+            adv_vel = torch.where(mask_adv, ZERO_VEL, adv_vel)
+            new_adversary_poses.append(adv_pos)
+            new_adversary_vels.append(adv_vel)
+            
+        adversary_poses = new_adversary_poses
+        adversary_vels = new_adversary_vels
+
+        return ball_pos, ball_vel, adversary_poses, adversary_vels
+
+
+    def observation_base( self,
+        agent_pos, agent_rot, agent_vel, agent_force,
+        teammate_poses, teammate_forces, teammate_vels,
+        adversary_poses, adversary_forces, adversary_vels,
+        ball_pos, ball_vel, ball_force, goal_pos,
         blue: bool,
     ):
         # Make all inputs same batch size (this is needed when this function is called for rendering
         input = [
-            agent_pos,
-            agent_rot,
-            agent_vel,
-            agent_force,
-            ball_pos,
-            ball_vel,
-            ball_force,
+            agent_pos, agent_rot, agent_vel, agent_force,
+            ball_pos, ball_vel, ball_force,
             goal_pos,
-            teammate_poses,
-            teammate_forces,
-            teammate_vels,
-            adversary_poses,
-            adversary_forces,
-            adversary_vels,
+            teammate_poses, teammate_forces, teammate_vels,
+            adversary_poses, adversary_forces, adversary_vels,
         ]
         for o in input:
             if isinstance(o, Tensor) and len(o.shape) > 1:
@@ -1272,70 +1257,27 @@ class FootballDesign(BaseScenario):
                         o[i] = o[i].unsqueeze(0).expand(batch_dim, *o[i].shape)
                     o[i] = o[i].clone()
 
-        (
-            agent_pos,
-            agent_rot,
-            agent_vel,
-            agent_force,
-            ball_pos,
-            ball_vel,
-            ball_force,
+        ( agent_pos, agent_rot, agent_vel, agent_force,
+            ball_pos, ball_vel, ball_force,
             goal_pos,
-            teammate_poses,
-            teammate_forces,
-            teammate_vels,
-            adversary_poses,
-            adversary_forces,
-            adversary_vels,
+            teammate_poses, teammate_forces, teammate_vels,
+            adversary_poses, adversary_forces, adversary_vels,
         ) = input
-        #  End rendering code
-
-
-        # apply masking mechanism to blue agent observations
-        if blue and (self.mask_pitch_lhs or self.mask_pitch_rhs):
-            OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
-            ZERO_VEL = torch.zeros_like(ball_vel)
-
-            # initially all tensor all false, then bitwise or with lhs or rhs
-            mask_ball = torch.zeros_like(ball_pos[..., X], dtype=torch.bool)
-            if self.mask_pitch_lhs: mask_ball = mask_ball | (ball_pos[..., X] < 0.0)
-            if self.mask_pitch_rhs: mask_ball = mask_ball | (ball_pos[..., X] > 0.0)
-            
-            # apply mask to ball position and velocity using arbitary tensors
-            mask_ball = mask_ball.unsqueeze(-1)
-            ball_pos = torch.where(mask_ball, OUT_OF_BOUNDS_POS, ball_pos)
-            ball_vel = torch.where(mask_ball, ZERO_VEL, ball_vel)
-
-            # apply mask to red agents
-            new_adversary_poses, new_adversary_vels = [], []
-            for adv_pos, adv_vel in zip(adversary_poses, adversary_vels):
-                mask_adv = torch.zeros_like(adv_pos[..., X], dtype=torch.bool)
-                if self.mask_pitch_lhs: mask_adv = mask_adv | (adv_pos[..., X] < 0.0)
-                if self.mask_pitch_rhs: mask_adv = mask_adv | (adv_pos[..., X] > 0.0)
-                mask_adv = mask_adv.unsqueeze(-1)
-                
-                adv_pos = torch.where(mask_adv, OUT_OF_BOUNDS_POS, adv_pos)
-                adv_vel = torch.where(mask_adv, ZERO_VEL, adv_vel)
-                new_adversary_poses.append(adv_pos)
-                new_adversary_vels.append(adv_vel)
-                
-            adversary_poses = new_adversary_poses
-            adversary_vels = new_adversary_vels
 
 
         # If agent is red we have to flip the x of sign of each observation
         if (not blue):  
             for tensor in (
                 [ agent_pos, agent_vel, agent_force, ball_pos, ball_vel, ball_force, goal_pos, ]
-                + teammate_poses
-                + teammate_forces
-                + teammate_vels
-                + adversary_poses
-                + adversary_forces
-                + adversary_vels
+                + teammate_poses + teammate_forces + teammate_vels + adversary_poses + adversary_forces + adversary_vels
             ):
                 tensor[..., X] = -tensor[..., X]
             agent_rot = agent_rot - torch.pi
+
+        # If agent is blue i.e. our main players, change observation space if any information asymmetry
+        else:
+            if self.mask_pitch_lhs or self.mask_pitch_rhs:
+                ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_observation(ball_pos, ball_vel, adversary_poses, adversary_vels)
 
         obs = {
             "obs": [agent_force, agent_pos - ball_pos, agent_vel - ball_vel, ball_pos - goal_pos, ball_vel, ball_force],
