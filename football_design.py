@@ -87,9 +87,11 @@ class FootballDesign(BaseScenario):
         self.custom_red_pos = kwargs.pop("custom_red_pos", None)
         self.custom_ball_pos = kwargs.pop("custom_ball_pos", None) # currently not implemented, may be useful
 
-        # Masking mechanism
+        # Information Asymmetry flags
         self.mask_pitch_lhs = kwargs.pop("mask_pitch_lhs", False)
         self.mask_pitch_rhs = kwargs.pop("mask_pitch_rhs", False)
+        self.mask_ball = kwargs.pop("mask_ball", False)
+        self.mask_opponent = kwargs.pop("mask_opponent", False)
 
 
         if kwargs.pop("dense_reward_ratio", None) is not None:
@@ -1225,6 +1227,29 @@ class FootballDesign(BaseScenario):
         return ball_pos, ball_vel, adversary_poses, adversary_vels
 
 
+    def get_masked_ball_observation(self, ball_pos, ball_vel, ball_force):
+        ball_pos = torch.full_like(ball_pos, 100.0)
+        ball_vel = torch.zeros_like(ball_vel)
+        ball_force = torch.zeros_like(ball_force)
+
+        return ball_pos, ball_vel, ball_force
+
+    
+    def get_masked_opponent_observation(self, adversary_poses, adversary_vels, adversary_forces):
+        new_adversary_poses, new_adversary_vels, new_adversary_forces = [], [], []
+
+        for adv_pos, adv_vel, adv_force in zip(adversary_poses, adversary_vels, adversary_forces):
+            adv_pos = torch.full_like(adv_pos, 100.0)
+            adv_vel = torch.zeros_like(adv_vel)
+            adv_force = torch.zeros_like(adv_force)
+
+            new_adversary_poses.append(adv_pos)
+            new_adversary_vels.append(adv_vel)
+            new_adversary_forces.append(adv_force)
+
+        return new_adversary_poses, new_adversary_vels, new_adversary_forces
+
+
     def observation_base( self,
         agent_pos, agent_rot, agent_vel, agent_force,
         teammate_poses, teammate_forces, teammate_vels,
@@ -1278,6 +1303,10 @@ class FootballDesign(BaseScenario):
         else:
             if self.mask_pitch_lhs or self.mask_pitch_rhs:
                 ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_observation(ball_pos, ball_vel, adversary_poses, adversary_vels)
+            if self.mask_ball:
+                ball_pos, ball_vel, ball_force = self.get_masked_ball_observation(ball_pos, ball_vel, ball_force)
+            if self.mask_opponent:
+                adversary_poses, adversary_vels, adversary_forces = self.get_masked_opponent_observation(adversary_poses, adversary_vels, adversary_forces)
 
         obs = {
             "obs": [agent_force, agent_pos - ball_pos, agent_vel - ball_vel, ball_pos - goal_pos, ball_vel, ball_force],

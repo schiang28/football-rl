@@ -102,7 +102,9 @@ def make_env(config, vmas_device, asymmetries, show_specs, show_keys):
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
         mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
-        mask_pitch_rhs=asymmetries["mask_pitch_rhs"]
+        mask_pitch_rhs=asymmetries["mask_pitch_rhs"],
+        mask_ball=asymmetries["mask_ball"],
+        mask_opponent=asymmetries["mask_opponent"]
     )
 
     if show_specs:
@@ -337,7 +339,9 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
         observe_teammates=config.observe_teammates,
         render_mode="rgb_array",
         mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
-        mask_pitch_rhs=asymmetries["mask_pitch_rhs"]
+        mask_pitch_rhs=asymmetries["mask_pitch_rhs"],
+        mask_ball=asymmetries["mask_ball"],
+        mask_opponent=asymmetries["mask_opponent"]
     )
 
     evaluation_start_time = time.time()
@@ -491,8 +495,10 @@ if __name__ == "__main__":
     LOCAL = True
 
     asymmetries = {
-        "mask_pitch_lhs": True,
+        "mask_pitch_lhs": False,
         "mask_pitch_rhs": False,
+        "mask_ball": False,
+        "mask_opponent": True,
     }
 
     if LOCAL:
