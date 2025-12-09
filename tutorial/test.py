@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,12 +31,10 @@ class MAPPOConfig:
     num_cells = 256
     depth = 2
 
-    # Evaluation
-    explore = False
 
 
 def make_env(config, vmas_device):
-    """Creates VMAS environment for visualization specs."""
+    """Creates VMAS environment and gets agent key."""
     if config.scenario_name == "football": scenario = config.scenario()
     else: scenario = config.scenario_name
 
@@ -56,11 +55,8 @@ def make_env(config, vmas_device):
 
 
 def prepare_fixed_state(env, device, agent_key):
-    """
-    Creates a TensorDict template where all state components EXCEPT the ball's position are fixed to a canonical reference (e.g., zero velocity, agents at origin).
-    """
+    """Creates a TensorDict template where all state components except the ball's position are fixed to a canonical reference e.g. zero velocity, agents at origin."""
     state_td = env.reset(inplace=True).clone()
-    
     state_td.get(agent_key)["velocity"].zero_()
     state_td.get(agent_key)["force"].zero_()
     state_td["Ball"]["velocity"].zero_()
@@ -70,17 +66,16 @@ def prepare_fixed_state(env, device, agent_key):
 
     adv_key = f"agent_red_0" 
     if adv_key in state_td.keys():
-        state_td.get(adv_key)["position"] = torch.tensor([1.0, 0.0], device=device) # Fixed adversary pos
+        state_td.get(adv_key)["position"] = torch.tensor([1.0, 0.0], device=device)
         state_td.get(adv_key)["velocity"].zero_()
         state_td.get(adv_key)["force"].zero_()
         
     return state_td
 
 
-def plot_value(checkpoint_path, grid_points):
-    """Loads policy and critic and generates the Value and Action plots."""
+def run_inference(config, checkpoint_path, grid_points):
+    """Loads policy and critic and generates the value and action plots."""
     print(f"Starting plotting. Loading policy from: {checkpoint_path}")
-    
     device, vmas_device = setup_environment()
     env, agent_key = make_env(config, vmas_device)
     policy, critic = build_mappo_modules(env, config, device, agent_key)
@@ -88,143 +83,138 @@ def plot_value(checkpoint_path, grid_points):
     checkpoint = torch.load(checkpoint_path, map_location=device)
     policy.load_state_dict(checkpoint['policy_state_dict'])
     critic.load_state_dict(checkpoint['critic_state_dict'])
-    
     policy.eval()
     critic.eval()
     
     pitch_length, pitch_width = env.scenario.pitch_length, env.scenario.pitch_width
     pitch_x_range, pitch_y_range = (-pitch_length / 2, pitch_length / 2), (-pitch_width / 2, pitch_width / 2)
+
     x_coords = np.linspace(pitch_x_range[0], pitch_x_range[1], grid_points)
     y_coords = np.linspace(pitch_y_range[0], pitch_y_range[1], grid_points)
     X_grid, Y_grid = np.meshgrid(x_coords, y_coords)
     
     ball_positions = torch.tensor(np.stack([X_grid.flatten(), Y_grid.flatten()], axis=1), dtype=torch.float32, device=device)
     num_samples = len(ball_positions)
-    
-    agent_pos_fixed = torch.zeros(num_samples, 2, device=device)
-    agent_vel_fixed = torch.zeros(num_samples, 2, device=device)
-    agent_force_fixed = torch.zeros(num_samples, 2, device=device)
-    agent_rot_fixed = torch.zeros(num_samples, 1, device=device)
 
-    ball_vel_fixed = torch.zeros(num_samples, 2, device=device)
-    ball_force_fixed = torch.zeros(num_samples, 2, device=device)
-
+    fixed_base_vector = torch.zeros(num_samples, 2, device=device)
     adv_pos_fixed = torch.tensor([1.0, 0.0], device=device).unsqueeze(0).expand(num_samples, 2) 
-
-    goal_pos_fixed = env.scenario.right_goal_pos.clone()
-    goal_pos_fixed = goal_pos_fixed.unsqueeze(0).expand(num_samples, 2)
+    goal_pos_fixed = env.scenario.right_goal_pos.clone().unsqueeze(0).expand(num_samples, 2)
     
-    obs_batch_temp = env.scenario.observation_base(
-        agent_pos=agent_pos_fixed,
-        agent_rot=agent_rot_fixed,
-        agent_vel=agent_vel_fixed,
-        agent_force=agent_force_fixed,
+    obs_batch = env.scenario.observation_base(
+        agent_pos=fixed_base_vector,
+        agent_vel=fixed_base_vector,
+        agent_force=fixed_base_vector,
+        agent_rot=torch.zeros(num_samples, 1, device=device), # rotation is only an angle
 
         adversary_poses=[adv_pos_fixed],
-        adversary_forces=[agent_force_fixed],
-        adversary_vels=[agent_vel_fixed],
-
+        adversary_forces=[fixed_base_vector],
+        adversary_vels=[fixed_base_vector],
         teammate_poses=[], teammate_forces=[], teammate_vels=[],
-        ball_pos=ball_positions,
-        ball_vel=agent_vel_fixed,
-        ball_force=agent_force_fixed,
 
+        ball_pos=ball_positions,
+        ball_vel=fixed_base_vector,
+        ball_force=fixed_base_vector,
         goal_pos=goal_pos_fixed, 
         blue=True,
-    )
-
-    obs_batch = obs_batch_temp.unsqueeze(1)
+    ).unsqueeze(1)
 
     eval_td = TensorDict({
         agent_key: TensorDict({'observation': obs_batch}, batch_size=[num_samples, 1])
     }, batch_size=[num_samples], device=device)
     
+    # for the eval tensor, use critic to get value of states
     with torch.no_grad():
         value_td = critic(eval_td)
         V_s = value_td.get((agent_key, 'state_value')).squeeze().cpu().numpy()
-        
+
+        # for each state also get the policy for plotting an action vector
         with set_exploration_type(ExplorationType.DETERMINISTIC):
             policy_td = policy(eval_td)
             Mu_x = policy_td.get((agent_key, 'loc'))[..., 0].cpu().numpy()
             Mu_y = policy_td.get((agent_key, 'loc'))[..., 1].cpu().numpy()
 
-
     V_s_grid = V_s.reshape(grid_points, grid_points)
     Mu_x_grid = Mu_x.reshape(grid_points, grid_points)
     Mu_y_grid = Mu_y.reshape(grid_points, grid_points)
+
+    pitch_geometry = {
+        'X_grid': X_grid, 'Y_grid': Y_grid,
+        'X_range': pitch_x_range, 'Y_range': pitch_y_range,
+        'agent_key': agent_key
+    }
+
+    return V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry
+
+
+def plot_value_heatmap(V_s_grid, pitch_geometry, save_path, save):
+    """Plots a heatmap of the football pitch from the value function."""
+    plt.figure(figsize=(13, 6))
+    ax = plt.gca()
+    norm = Normalize(vmin=V_s_grid.min(), vmax=V_s_grid.max())
+
+    X_range, Y_range = pitch_geometry['X_range'], pitch_geometry['Y_range']
+    im = ax.imshow(V_s_grid, origin='lower', 
+                   extent=[X_range[0], X_range[1], Y_range[0], Y_range[1]], 
+                   aspect='auto', cmap='Greens', norm=norm)
     
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    plt.colorbar(im, ax=ax, label='Value Function')
+    ax.axvline(x=0, color='lightgrey', linestyle='-')
     
-    # --- Plot 1: Value Function Heatmap ---
-    ax1 = axes[0]
-    norm = Normalize(vmin=V_s.min(), vmax=V_s.max())
+    ax.set_title(f'Pitch value function heatmap.')
+    ax.set_xlabel('X-Coordinate')
+    ax.set_ylabel('Y-Coordinate')
     
-    im = ax1.imshow(V_s_grid, origin='lower', 
-                    extent=[pitch_x_range[0], pitch_x_range[1], pitch_y_range[0], pitch_y_range[1]], 
-                    aspect='auto', cmap='viridis', norm=norm)
-    fig.colorbar(im, ax=ax1, label='Predicted Value $V(s)$')
-    
-    ax1.set_title(f'Value Function $V(s)$ (Ball Position)')
-    ax1.set_xlabel('Pitch X-Coordinate')
-    ax1.set_ylabel('Pitch Y-Coordinate')
-    ax1.axvline(x=0, color='gray', linestyle='--') # Center line
-    
-    # --- Plot 2: Policy Action Quiver Plot (Vector Field) ---
-    ax2 = axes[1]
-    
-    # Quiver plot uses subsampling to avoid cluttering the plot
-    subsample = 5
-    ax2.quiver(X_grid[::subsample, ::subsample], Y_grid[::subsample, ::subsample], 
-               Mu_x_grid[::subsample, ::subsample], Mu_y_grid[::subsample, ::subsample], 
-               scale=10, scale_units='x', color='red', alpha=0.8) # Adjust scale for better visualization
-    
-    # Overlay the Value Function heatmap for context
-    ax2.imshow(V_s_grid, origin='lower', 
-               extent=[pitch_x_range[0], pitch_x_range[1], pitch_y_range[0], pitch_y_range[1]], 
-               aspect='auto', cmap='Greys', alpha=0.3)
-    
-    ax2.set_title(f'Policy Mean Action $\\mu(s)$ Vector Field')
-    ax2.set_xlabel('Pitch X-Coordinate')
-    ax2.set_ylabel('Pitch Y-Coordinate')
-    ax2.axvline(x=0, color='gray', linestyle='--')
-    
-    plt.suptitle(f"Policy and Value Function Analysis (Agent: {agent_key})")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout()
+    if save:
+        save_path = f"{save_path}_val_heatmap.pdf"
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
     plt.show()
 
 
-def plot_value_heatmap(V_s_grid, pitch_geometry):
-    """Plots the Value Function V(s) heatmap."""
+def plot_action_vectors(V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry, subsample=5):
+    """Plots the Policy Mean Action Vector Field."""
     
+    X_grid, Y_grid = pitch_geometry['X_grid'], pitch_geometry['Y_grid']
     X_range, Y_range = pitch_geometry['X_range'], pitch_geometry['Y_range']
     agent_key = pitch_geometry['agent_key']
     
-    plt.figure(figsize=(8, 8)) # Use a square figure size for better visual aspect
+    plt.figure(figsize=(13, 6))
     ax = plt.gca()
+
+    ax.imshow(V_s_grid, origin='lower', 
+               extent=[X_range[0], X_range[1], Y_range[0], Y_range[1]], 
+               aspect='auto', cmap='Greens', alpha=0.7)
     
-    norm = Normalize(vmin=V_s_grid.min(), vmax=V_s_grid.max())
+    ax.quiver(X_grid[::subsample, ::subsample], Y_grid[::subsample, ::subsample], 
+               Mu_x_grid[::subsample, ::subsample], Mu_y_grid[::subsample, ::subsample], 
+               scale=10, scale_units='x', color='red', alpha=0.8)
     
-    im = ax.imshow(V_s_grid, origin='lower', 
-                   extent=[X_range[0], X_range[1], Y_range[0], Y_range[1]], 
-                   aspect='auto', cmap='viridis', norm=norm)
-    
-    plt.colorbar(im, ax=ax, label='Predicted Value $V(s)$')
-    
-    ax.set_title(f'Value Function $V(s)$ (Ball Position)')
+    ax.set_title(f'Policy Mean Action $\\mu(s)$ Vector Field')
     ax.set_xlabel('Pitch X-Coordinate')
     ax.set_ylabel('Pitch Y-Coordinate')
-    ax.axvline(x=0, color='white', linestyle='--') # Center line
+    ax.axvline(x=0, color='lightgrey', linestyle='-')
     
-    plt.suptitle(f"Value Analysis for {agent_key}")
+    plt.suptitle(f"Policy Action Analysis for {agent_key}")
     plt.tight_layout()
     plt.show()
 
 
+
 if __name__ == "__main__":
     config = MAPPOConfig()
-    GRID_POINTS = 50
+    GRID_POINTS = 200
+    PLOT_VALUE_HEATMAP = True
+    PLOT_ACTION_VECTORS = False
 
-    checkpoint_path = "./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt"
+    checkpoint, policy_no = "011225_195207", "499"
+    checkpoint_path = f"./saved_policies/mappo_football_{checkpoint}/iteration_{policy_no}_policy.pt"
+    save_path = f"plots/{checkpoint}_{policy_no}"
 
-    plot_value(checkpoint_path=checkpoint_path,
-               grid_points=GRID_POINTS)
+    V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry = run_inference(
+        config=config,
+        checkpoint_path=checkpoint_path,
+        grid_points=GRID_POINTS)
+
+    if PLOT_VALUE_HEATMAP: plot_value_heatmap(V_s_grid, pitch_geometry, save_path, save=False)
+    if PLOT_ACTION_VECTORS: plot_action_vectors(V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry, save=False)

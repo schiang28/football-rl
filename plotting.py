@@ -76,7 +76,7 @@ def prepare_fixed_state(env, device, agent_key):
 def run_inference(config, checkpoint_path, grid_points):
     """Loads policy and critic and generates the value and action plots."""
     print(f"Starting plotting. Loading policy from: {checkpoint_path}")
-    
+
     device, vmas_device = setup_environment()
     env, agent_key = make_env(config, vmas_device)
     policy, critic = build_mappo_modules(env, config, device, agent_key)
@@ -84,48 +84,28 @@ def run_inference(config, checkpoint_path, grid_points):
     checkpoint = torch.load(checkpoint_path, map_location=device)
     policy.load_state_dict(checkpoint['policy_state_dict'])
     critic.load_state_dict(checkpoint['critic_state_dict'])
-    
     policy.eval()
     critic.eval()
     
     pitch_length, pitch_width = env.scenario.pitch_length, env.scenario.pitch_width
     pitch_x_range, pitch_y_range = (-pitch_length / 2, pitch_length / 2), (-pitch_width / 2, pitch_width / 2)
-
     x_coords = np.linspace(pitch_x_range[0], pitch_x_range[1], grid_points)
     y_coords = np.linspace(pitch_y_range[0], pitch_y_range[1], grid_points)
     X_grid, Y_grid = np.meshgrid(x_coords, y_coords)
     
     ball_positions = torch.tensor(np.stack([X_grid.flatten(), Y_grid.flatten()], axis=1), dtype=torch.float32, device=device)
     num_samples = len(ball_positions)
-    
-    agent_pos_fixed = torch.zeros(num_samples, 2, device=device)
-    agent_vel_fixed = torch.zeros(num_samples, 2, device=device)
-    agent_force_fixed = torch.zeros(num_samples, 2, device=device)
-    agent_rot_fixed = torch.zeros(num_samples, 1, device=device)
 
-    ball_vel_fixed = torch.zeros(num_samples, 2, device=device)
-    ball_force_fixed = torch.zeros(num_samples, 2, device=device)
-
+    fixed_base_vector = torch.zeros(num_samples, 2, device=device)
     adv_pos_fixed = torch.tensor([1.0, 0.0], device=device).unsqueeze(0).expand(num_samples, 2) 
-
-    goal_pos_fixed = env.scenario.right_goal_pos.clone()
-    goal_pos_fixed = goal_pos_fixed.unsqueeze(0).expand(num_samples, 2)
+    goal_pos_fixed = env.scenario.right_goal_pos.clone().unsqueeze(0).expand(num_samples, 2)
     
     obs_batch = env.scenario.observation_base(
-        agent_pos=agent_pos_fixed,
-        agent_rot=agent_rot_fixed,
-        agent_vel=agent_vel_fixed,
-        agent_force=agent_force_fixed,
-
-        adversary_poses=[adv_pos_fixed],
-        adversary_forces=[agent_force_fixed],
-        adversary_vels=[agent_vel_fixed],
-
+        agent_pos=fixed_base_vector, agent_vel=fixed_base_vector, agent_force=fixed_base_vector,
+        agent_rot=torch.zeros(num_samples, 1, device=device), # rotation is only an angle
+        adversary_poses=[adv_pos_fixed], adversary_forces=[fixed_base_vector], adversary_vels=[fixed_base_vector],
         teammate_poses=[], teammate_forces=[], teammate_vels=[],
-        ball_pos=ball_positions,
-        ball_vel=agent_vel_fixed,
-        ball_force=agent_force_fixed,
-
+        ball_pos=ball_positions, ball_vel=fixed_base_vector, ball_force=fixed_base_vector,
         goal_pos=goal_pos_fixed, 
         blue=True,
     ).unsqueeze(1)
@@ -133,20 +113,6 @@ def run_inference(config, checkpoint_path, grid_points):
     eval_td = TensorDict({
         agent_key: TensorDict({'observation': obs_batch}, batch_size=[num_samples, 1])
     }, batch_size=[num_samples], device=device)
-    
-    with torch.no_grad():
-        value_td = critic(eval_td)
-        V_s = value_td.get((agent_key, 'state_value')).squeeze().cpu().numpy()
-        
-        with set_exploration_type(ExplorationType.DETERMINISTIC):
-            policy_td = policy(eval_td)
-            Mu_x = policy_td.get((agent_key, 'loc'))[..., 0].cpu().numpy()
-            Mu_y = policy_td.get((agent_key, 'loc'))[..., 1].cpu().numpy()
-
-
-    V_s_grid = V_s.reshape(grid_points, grid_points)
-    Mu_x_grid = Mu_x.reshape(grid_points, grid_points)
-    Mu_y_grid = Mu_y.reshape(grid_points, grid_points)
 
     pitch_geometry = {
         'X_grid': X_grid, 'Y_grid': Y_grid,
@@ -154,11 +120,16 @@ def run_inference(config, checkpoint_path, grid_points):
         'agent_key': agent_key
     }
 
-    return V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry
+    return eval_td, agent_key, pitch_geometry, policy, critic
 
 
-def plot_value_heatmap(V_s_grid, pitch_geometry, save_path, save):
-    """Plots a heatmap of the football pitch from the value function."""
+def plot_value_heatmap(pitch_geometry, grid_points, eval_td, agent_key, critic, save_path, save):
+    """Plots a heatmap of the football pitch from the value function. We use the critic to get the value of states."""
+    with torch.no_grad():
+        value_td = critic(eval_td)
+        V_s = value_td.get((agent_key, 'state_value')).squeeze().cpu().numpy()
+    V_s_grid = V_s.reshape(grid_points, grid_points)
+
     plt.figure(figsize=(13, 6))
     ax = plt.gca()
     norm = Normalize(vmin=V_s_grid.min(), vmax=V_s_grid.max())
@@ -183,8 +154,20 @@ def plot_value_heatmap(V_s_grid, pitch_geometry, save_path, save):
     plt.show()
 
 
-def plot_action_vectors(V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry, subsample=5):
-    """Plots the Policy Mean Action Vector Field."""
+def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, agent_key, subsample=5):
+    """Plots the policy mean action on the pitch like a vector field."""
+    with torch.no_grad():
+        value_td = critic(eval_td)
+        V_s = value_td.get((agent_key, 'state_value')).squeeze().cpu().numpy()
+        # for each state also get the policy for plotting an action vector
+        with set_exploration_type(ExplorationType.DETERMINISTIC):
+            policy_td = policy(eval_td)
+            Mu_x = policy_td.get((agent_key, 'loc'))[..., 0].cpu().numpy()
+            Mu_y = policy_td.get((agent_key, 'loc'))[..., 1].cpu().numpy()
+
+    V_s_grid = V_s.reshape(grid_points, grid_points)
+    Mu_x_grid = Mu_x.reshape(grid_points, grid_points)
+    Mu_y_grid = Mu_y.reshape(grid_points, grid_points)
     
     X_grid, Y_grid = pitch_geometry['X_grid'], pitch_geometry['Y_grid']
     X_range, Y_range = pitch_geometry['X_range'], pitch_geometry['Y_range']
@@ -211,6 +194,7 @@ def plot_action_vectors(V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry, subsampl
     plt.show()
 
 
+
 if __name__ == "__main__":
     config = MAPPOConfig()
     GRID_POINTS = 200
@@ -221,10 +205,10 @@ if __name__ == "__main__":
     checkpoint_path = f"./saved_policies/mappo_football_{checkpoint}/iteration_{policy_no}_policy.pt"
     save_path = f"plots/{checkpoint}_{policy_no}"
 
-    V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry = run_inference(
+    eval_td, agent_key, pitch_geometry, policy, critic = run_inference(
         config=config,
         checkpoint_path=checkpoint_path,
         grid_points=GRID_POINTS)
 
-    if PLOT_VALUE_HEATMAP: plot_value_heatmap(V_s_grid, pitch_geometry, save_path, save=True)
-    if PLOT_ACTION_VECTORS: plot_action_vectors(V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry, save=False)
+    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, save_path, save=False)
+    if PLOT_ACTION_VECTORS: plot_action_vectors(pitch_geometry, GRID_POINTS, eval_td, policy, critic, agent_key, save=False)
