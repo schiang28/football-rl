@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,7 +7,7 @@ from matplotlib.colors import Normalize
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from torchrl.envs import TransformedEnv
 from torchrl.envs.libs.vmas import VmasEnv
-from tensordict.nn import TensorDictModule
+from tensordict.tensordict import TensorDict
 
 from football_design import FootballDesign
 from mappo_vmas_training import build_mappo_modules, setup_environment 
@@ -30,12 +31,10 @@ class MAPPOConfig:
     num_cells = 256
     depth = 2
 
-    # Evaluation
-    explore = False
 
 
 def make_env(config, vmas_device):
-    """Creates VMAS environment for visualization specs."""
+    """Creates VMAS environment and gets agent key."""
     if config.scenario_name == "football": scenario = config.scenario()
     else: scenario = config.scenario_name
 
@@ -56,32 +55,26 @@ def make_env(config, vmas_device):
 
 
 def prepare_fixed_state(env, device, agent_key):
-    """
-    Creates a TensorDict template where all state components EXCEPT the ball's position are fixed to a canonical reference (e.g., zero velocity, agents at origin).
-    """
+    """Creates a TensorDict template where all state components except the ball's position are fixed to a canonical reference e.g. zero velocity, agents at origin."""
     state_td = env.reset(inplace=True).clone()
-    
-    # 1. Fix all dynamic variables to zero
     state_td.get(agent_key)["velocity"].zero_()
     state_td.get(agent_key)["force"].zero_()
     state_td["Ball"]["velocity"].zero_()
     state_td["Ball"]["force"].zero_()
     
-    # 2. Fix agent position for clear relative observation (Blue agent is at origin)
     state_td.get(agent_key)["position"].zero_()
 
-    # 3. Handle Adversary (Red Agent)
     adv_key = f"agent_red_0" 
     if adv_key in state_td.keys():
-        state_td.get(adv_key)["position"] = torch.tensor([1.0, 0.0], device=device) # Fixed adversary pos
+        state_td.get(adv_key)["position"] = torch.tensor([1.0, 0.0], device=device)
         state_td.get(adv_key)["velocity"].zero_()
         state_td.get(adv_key)["force"].zero_()
         
     return state_td
 
 
-def plot_value(checkpoint_path, grid_points, pitch_x_range, pitch_y_range):
-    """Loads policy and critic and generates the Value and Action plots."""
+def run_inference(config, checkpoint_path, grid_points):
+    """Loads policy and critic and generates the value and action plots."""
     print(f"Starting plotting. Loading policy from: {checkpoint_path}")
     
     device, vmas_device = setup_environment()
@@ -95,62 +88,50 @@ def plot_value(checkpoint_path, grid_points, pitch_x_range, pitch_y_range):
     policy.eval()
     critic.eval()
     
-    # Prepare base state template (Agent at (0,0), all speeds zero)
-    scenario_obj = env.env.scenario
-    right_goal_pos = scenario_obj.right_goal_pos
+    pitch_length, pitch_width = env.scenario.pitch_length, env.scenario.pitch_width
+    pitch_x_range, pitch_y_range = (-pitch_length / 2, pitch_length / 2), (-pitch_width / 2, pitch_width / 2)
 
-    blue_agent = env.unwrapped.world.agents[0]
-    red_agent = env.unwrapped.world.agents[1] if len(env.unwrapped.world.agents) > 1 else None
-    ball = env.unwrapped.world.ball
-    
-    # --- 1. Create Grid and Batch TD ---
     x_coords = np.linspace(pitch_x_range[0], pitch_x_range[1], grid_points)
     y_coords = np.linspace(pitch_y_range[0], pitch_y_range[1], grid_points)
     X_grid, Y_grid = np.meshgrid(x_coords, y_coords)
     
-    ball_positions = torch.tensor(
-        np.stack([X_grid.flatten(), Y_grid.flatten()], axis=1),
-        dtype=torch.float32,
-        device=device
-    )
+    ball_positions = torch.tensor(np.stack([X_grid.flatten(), Y_grid.flatten()], axis=1), dtype=torch.float32, device=device)
     num_samples = len(ball_positions)
     
-    agent_pos_fixed = torch.zeros(num_samples, 2, device=device) # Blue agent fixed at (0, 0)
+    agent_pos_fixed = torch.zeros(num_samples, 2, device=device)
     agent_vel_fixed = torch.zeros(num_samples, 2, device=device)
     agent_force_fixed = torch.zeros(num_samples, 2, device=device)
     agent_rot_fixed = torch.zeros(num_samples, 1, device=device)
+
+    ball_vel_fixed = torch.zeros(num_samples, 2, device=device)
+    ball_force_fixed = torch.zeros(num_samples, 2, device=device)
+
     adv_pos_fixed = torch.tensor([1.0, 0.0], device=device).unsqueeze(0).expand(num_samples, 2) 
-    # Repeat the fixed base TD for all grid points
 
-    all_obs_vectors = []
+    goal_pos_fixed = env.scenario.right_goal_pos.clone()
+    goal_pos_fixed = goal_pos_fixed.unsqueeze(0).expand(num_samples, 2)
     
-    for i in range(num_samples):
-        # Generate the observation vector by calling the internal scenario method:
-        obs_tensor = env.unwrapped.scenario.observation_base(
-            agent_pos=agent_pos_fixed[i],
-            agent_rot=agent_rot_fixed[i],
-            agent_vel=agent_vel_fixed[i],
-            agent_force=agent_force_fixed[i],
-            # Pass only the position/velocity of the current ball sample
-            ball_pos=ball_positions[i],
-            ball_vel=torch.zeros(2, device=device),
-            ball_force=torch.zeros(2, device=device),
-            goal_pos=env.unwrapped.scenario.right_goal_pos, # Target goal position (fixed)
-            blue=True,
-            
-            # Adversary/Teammate positions must be passed as LISTS of tensors
-            adversary_poses=[adv_pos_fixed[i]],
-            adversary_forces=[torch.zeros(2, device=device)],
-            adversary_vels=[torch.zeros(2, device=device)],
-            teammate_poses=[], # No teammates in 1v1
-            teammate_forces=[],
-            teammate_vels=[],
-        )
-        all_obs_vectors.append(obs_tensor)
+    obs_batch = env.scenario.observation_base(
+        agent_pos=agent_pos_fixed,
+        agent_rot=agent_rot_fixed,
+        agent_vel=agent_vel_fixed,
+        agent_force=agent_force_fixed,
 
-    obs_batch = torch.stack(all_obs_vectors, dim=0)
-    eval_td = torch.TensorDict({
-        agent_key: torch.TensorDict({'observation': obs_batch}, batch_size=[num_samples])
+        adversary_poses=[adv_pos_fixed],
+        adversary_forces=[agent_force_fixed],
+        adversary_vels=[agent_vel_fixed],
+
+        teammate_poses=[], teammate_forces=[], teammate_vels=[],
+        ball_pos=ball_positions,
+        ball_vel=agent_vel_fixed,
+        ball_force=agent_force_fixed,
+
+        goal_pos=goal_pos_fixed, 
+        blue=True,
+    ).unsqueeze(1)
+
+    eval_td = TensorDict({
+        agent_key: TensorDict({'observation': obs_batch}, batch_size=[num_samples, 1])
     }, batch_size=[num_samples], device=device)
     
     with torch.no_grad():
@@ -166,56 +147,84 @@ def plot_value(checkpoint_path, grid_points, pitch_x_range, pitch_y_range):
     V_s_grid = V_s.reshape(grid_points, grid_points)
     Mu_x_grid = Mu_x.reshape(grid_points, grid_points)
     Mu_y_grid = Mu_y.reshape(grid_points, grid_points)
+
+    pitch_geometry = {
+        'X_grid': X_grid, 'Y_grid': Y_grid,
+        'X_range': pitch_x_range, 'Y_range': pitch_y_range,
+        'agent_key': agent_key
+    }
+
+    return V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry
+
+
+def plot_value_heatmap(V_s_grid, pitch_geometry, save_path, save):
+    """Plots a heatmap of the football pitch from the value function."""
+    plt.figure(figsize=(13, 6))
+    ax = plt.gca()
+    norm = Normalize(vmin=V_s_grid.min(), vmax=V_s_grid.max())
+
+    X_range, Y_range = pitch_geometry['X_range'], pitch_geometry['Y_range']
+    im = ax.imshow(V_s_grid, origin='lower', 
+                   extent=[X_range[0], X_range[1], Y_range[0], Y_range[1]], 
+                   aspect='auto', cmap='Greens', norm=norm)
     
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    plt.colorbar(im, ax=ax, label='Value Function')
+    ax.axvline(x=0, color='lightgrey', linestyle='-')
     
-    # --- Plot 1: Value Function Heatmap ---
-    ax1 = axes[0]
-    norm = Normalize(vmin=V_s.min(), vmax=V_s.max())
+    ax.set_title(f'Pitch value function heatmap.')
+    ax.set_xlabel('X-Coordinate')
+    ax.set_ylabel('Y-Coordinate')
     
-    im = ax1.imshow(V_s_grid, origin='lower', 
-                    extent=[pitch_x_range[0], pitch_x_range[1], pitch_y_range[0], pitch_y_range[1]], 
-                    aspect='auto', cmap='viridis', norm=norm)
-    fig.colorbar(im, ax=ax1, label='Predicted Value $V(s)$')
+    plt.tight_layout()
+    if save:
+        save_path = f"{save_path}_val_heatmap.pdf"
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+    plt.show()
+
+
+def plot_action_vectors(V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry, subsample=5):
+    """Plots the Policy Mean Action Vector Field."""
     
-    ax1.set_title(f'Value Function $V(s)$ (Ball Position)')
-    ax1.set_xlabel('Pitch X-Coordinate')
-    ax1.set_ylabel('Pitch Y-Coordinate')
-    ax1.axvline(x=0, color='gray', linestyle='--') # Center line
+    X_grid, Y_grid = pitch_geometry['X_grid'], pitch_geometry['Y_grid']
+    X_range, Y_range = pitch_geometry['X_range'], pitch_geometry['Y_range']
+    agent_key = pitch_geometry['agent_key']
     
-    # --- Plot 2: Policy Action Quiver Plot (Vector Field) ---
-    ax2 = axes[1]
+    plt.figure(figsize=(13, 6))
+    ax = plt.gca()
+
+    ax.imshow(V_s_grid, origin='lower', 
+               extent=[X_range[0], X_range[1], Y_range[0], Y_range[1]], 
+               aspect='auto', cmap='Greens', alpha=0.7)
     
-    # Quiver plot uses subsampling to avoid cluttering the plot
-    subsample = 5
-    ax2.quiver(X_grid[::subsample, ::subsample], Y_grid[::subsample, ::subsample], 
+    ax.quiver(X_grid[::subsample, ::subsample], Y_grid[::subsample, ::subsample], 
                Mu_x_grid[::subsample, ::subsample], Mu_y_grid[::subsample, ::subsample], 
-               scale=10, scale_units='x', color='red', alpha=0.8) # Adjust scale for better visualization
+               scale=10, scale_units='x', color='red', alpha=0.8)
     
-    # Overlay the Value Function heatmap for context
-    ax2.imshow(V_s_grid, origin='lower', 
-               extent=[pitch_x_range[0], pitch_x_range[1], pitch_y_range[0], pitch_y_range[1]], 
-               aspect='auto', cmap='Greys', alpha=0.3)
+    ax.set_title(f'Policy Mean Action $\\mu(s)$ Vector Field')
+    ax.set_xlabel('Pitch X-Coordinate')
+    ax.set_ylabel('Pitch Y-Coordinate')
+    ax.axvline(x=0, color='lightgrey', linestyle='-')
     
-    ax2.set_title(f'Policy Mean Action $\\mu(s)$ Vector Field')
-    ax2.set_xlabel('Pitch X-Coordinate')
-    ax2.set_ylabel('Pitch Y-Coordinate')
-    ax2.axvline(x=0, color='gray', linestyle='--')
-    
-    plt.suptitle(f"Policy and Value Function Analysis (Agent: {agent_key})")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.suptitle(f"Policy Action Analysis for {agent_key}")
+    plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
     config = MAPPOConfig()
-    GRID_POINTS = 50
-    PITCH_X_RANGE = (-1.5, 1.5)
-    PITCH_Y_RANGE = (-0.75, 0.75)
+    GRID_POINTS = 200
+    PLOT_VALUE_HEATMAP = True
+    PLOT_ACTION_VECTORS = False
 
-    checkpoint_path = "./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt"
+    checkpoint, policy_no = "011225_195207", "499"
+    checkpoint_path = f"./saved_policies/mappo_football_{checkpoint}/iteration_{policy_no}_policy.pt"
+    save_path = f"plots/{checkpoint}_{policy_no}"
 
-    plot_value(checkpoint_path=checkpoint_path,
-               grid_points=GRID_POINTS,
-               pitch_x_range=PITCH_X_RANGE,
-               pitch_y_range=PITCH_Y_RANGE)
+    V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry = run_inference(
+        config=config,
+        checkpoint_path=checkpoint_path,
+        grid_points=GRID_POINTS)
+
+    if PLOT_VALUE_HEATMAP: plot_value_heatmap(V_s_grid, pitch_geometry, save_path, save=True)
+    if PLOT_ACTION_VECTORS: plot_action_vectors(V_s_grid, Mu_x_grid, Mu_y_grid, pitch_geometry, save=False)

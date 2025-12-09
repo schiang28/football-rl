@@ -441,7 +441,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
 
         # save checkpointed policy every n episodes
         if (log_iteration > 0 and save_policies and ((log_iteration % config.checkpoint_interval == 0) or (log_iteration + 1 == config.n_iters))):
-            save_checkpoint(policy, log_iteration, critic, optim, timestamp)
+            save_checkpoint(policy, log_iteration, critic, optim, timestamp, local)
 
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time

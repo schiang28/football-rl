@@ -1,24 +1,21 @@
 import torch
-import imageio
-import os
-import datetime
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 
-from tensordict.nn import set_composite_lp_aggregate, TensorDictModule
-from tensordict.nn.distributions import NormalParamExtractor
-from torch import multiprocessing
-
+from torchrl.envs.utils import set_exploration_type, ExplorationType
 from torchrl.envs import TransformedEnv
 from torchrl.envs.libs.vmas import VmasEnv
-from torchrl.envs.utils import ExplorationType, set_exploration_type
+from tensordict.tensordict import TensorDict
 
-from torchrl.modules import MultiAgentMLP, ProbabilisticActor, TanhNormal
-from utils import ClipModule
 from football_design import FootballDesign
+from mappo_vmas_training import build_mappo_modules, setup_environment 
+
 
 
 class MAPPOConfig:
     # Environment
-    max_steps = 500 # max no. timesteps per episode
+    max_steps = 500
     scenario_name = "football"
     scenario = FootballDesign
     b_agents = 1
@@ -30,42 +27,27 @@ class MAPPOConfig:
     mappo = True
     share_parameters_policy = True
     share_parameters_critic = True
-    num_cells = 256 # size of each layer in nn
-    depth = 2 # no. hidden layer in policy/value networks
+    num_cells = 256
+    depth = 2
 
     # Evaluation
     explore = False
 
 
-
-def setup_environment():
-    """Determines device, sets seed and configures torch/tensordict settings."""
-    torch.manual_seed(0)
-    is_fork = multiprocessing.get_start_method() == "fork"
-    device = torch.device(0 if torch.cuda.is_available() and not is_fork else "cpu")
-    vmas_device = device
-    set_composite_lp_aggregate(False).set()
-
-    return vmas_device, device
-
-
-def make_env(config, vmas_device, custom_blue_pos=None, custom_red_pos=None, custom_ball_pos=None):
-    """Creates VMAS enviroment for simulation."""
+def make_env(config, vmas_device):
+    """Creates VMAS environment for visualization specs."""
     if config.scenario_name == "football": scenario = config.scenario()
     else: scenario = config.scenario_name
 
     env = VmasEnv(
         scenario=scenario,
-        num_envs=1, # use num_envs=1 for recording a single rollout
+        num_envs=1,
         continuous_actions=True,
         max_steps=config.max_steps,
         device=vmas_device,
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
-        custom_blue_pos=custom_blue_pos,
-        custom_red_pos=custom_red_pos,
-        custom_ball_pos=custom_ball_pos
     )
 
     agent_key = env.action_keys[0][0]
@@ -73,131 +55,176 @@ def make_env(config, vmas_device, custom_blue_pos=None, custom_red_pos=None, cus
     return env, agent_key
 
 
-def build_mappo_modules(env, config, device, agent_key):
-    """Creates policy module architecture to load weights into."""
-    n_actions_per_agent = env.full_action_spec[env.action_key].shape[-1]
-    n_obs_per_agent = env.observation_spec[agent_key, "observation"].shape[-1]
+def prepare_fixed_state(env, device, agent_key):
+    """
+    Creates a TensorDict template where all state components EXCEPT the ball's position are fixed to a canonical reference (e.g., zero velocity, agents at origin).
+    """
+    state_td = env.reset(inplace=True).clone()
+    
+    state_td.get(agent_key)["velocity"].zero_()
+    state_td.get(agent_key)["force"].zero_()
+    state_td["Ball"]["velocity"].zero_()
+    state_td["Ball"]["force"].zero_()
+    
+    state_td.get(agent_key)["position"].zero_()
 
-    policy_net = torch.nn.Sequential(
-        MultiAgentMLP(
-            n_agent_inputs=n_obs_per_agent,
-            n_agent_outputs=2 * n_actions_per_agent,
-            n_agents=env.n_agents,
-            centralised=False,
-            share_params=config.share_parameters_policy,
-            device=device,
-            depth=config.depth,
-            num_cells=config.num_cells,
-            activation_class=torch.nn.Tanh,
-        ),
-        ClipModule(-5, 5),
-        NormalParamExtractor("biased_softplus_1.0"),
-    )
-
-    policy_module = TensorDictModule(
-        policy_net, in_keys=[(agent_key, "observation")], out_keys=[(agent_key, "loc"), (agent_key, "scale")],
-    )
-
-    policy = ProbabilisticActor(
-        module=policy_module,
-        spec=env.action_spec_unbatched,
-        in_keys=[(agent_key, "loc"), (agent_key, "scale")],
-        out_keys=[env.action_key],
-        distribution_class=TanhNormal,
-        distribution_kwargs={
-            "low": env.full_action_spec_unbatched[env.action_key].space.low,
-            "high": env.full_action_spec_unbatched[env.action_key].space.high,
-        },
-        return_log_prob=True,
-    )
-
-    # no critic is needed for simulation
-    return policy, None
+    adv_key = f"agent_red_0" 
+    if adv_key in state_td.keys():
+        state_td.get(adv_key)["position"] = torch.tensor([1.0, 0.0], device=device) # Fixed adversary pos
+        state_td.get(adv_key)["velocity"].zero_()
+        state_td.get(adv_key)["force"].zero_()
+        
+    return state_td
 
 
-def get_custom_positions(start_pos_dict, device):
-    blue_pos = start_pos_dict['blue_pos']
-    red_pos = start_pos_dict['red_pos']
-    ball_pos = start_pos_dict['ball_pos']
-
-    if blue_pos:
-        custom_blue_start = torch.tensor(
-            blue_pos,
-            device=device,
-            dtype=torch.float32
-        )
-    else: custom_blue_start = None
-
-    if red_pos:
-        custom_red_start = torch.tensor(
-            red_pos,
-            device=device,
-            dtype=torch.float32
-        )
-    else: custom_red_start = None
-
-    if ball_pos:
-        custom_ball_start = torch.tensor(
-            ball_pos,
-            device=device,
-            dtype=torch.float32
-        )
-    else: custom_ball_start = None
-
-    return custom_blue_start, custom_red_start, custom_ball_start
-
-
-def simulate_rollout(checkpoint_path, config, gif_path, start_pos_dict):
-    """Loads policy weights, runs a single episode, and saves the rollout as a GIF."""
-    print(f"Starting simulation. Loading policy from: {checkpoint_path}")
-
-    vmas_device, device = setup_environment()
-    custom_blue_pos, custom_red_pos, custom_ball_pos = get_custom_positions(start_pos_dict, device)
-    env, agent_key = make_env(config, vmas_device, custom_blue_pos, custom_red_pos, custom_ball_pos)
-    policy, _ = build_mappo_modules(env, config, device, agent_key)
+def plot_value(checkpoint_path, grid_points):
+    """Loads policy and critic and generates the Value and Action plots."""
+    print(f"Starting plotting. Loading policy from: {checkpoint_path}")
+    
+    device, vmas_device = setup_environment()
+    env, agent_key = make_env(config, vmas_device)
+    policy, critic = build_mappo_modules(env, config, device, agent_key)
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     policy.load_state_dict(checkpoint['policy_state_dict'])
+    critic.load_state_dict(checkpoint['critic_state_dict'])
+    
+    policy.eval()
+    critic.eval()
+    
+    pitch_length, pitch_width = env.scenario.pitch_length, env.scenario.pitch_width
+    pitch_x_range, pitch_y_range = (-pitch_length / 2, pitch_length / 2), (-pitch_width / 2, pitch_width / 2)
+    x_coords = np.linspace(pitch_x_range[0], pitch_x_range[1], grid_points)
+    y_coords = np.linspace(pitch_y_range[0], pitch_y_range[1], grid_points)
+    X_grid, Y_grid = np.meshgrid(x_coords, y_coords)
+    
+    ball_positions = torch.tensor(np.stack([X_grid.flatten(), Y_grid.flatten()], axis=1), dtype=torch.float32, device=device)
+    num_samples = len(ball_positions)
+    
+    agent_pos_fixed = torch.zeros(num_samples, 2, device=device)
+    agent_vel_fixed = torch.zeros(num_samples, 2, device=device)
+    agent_force_fixed = torch.zeros(num_samples, 2, device=device)
+    agent_rot_fixed = torch.zeros(num_samples, 1, device=device)
 
-    all_frames = []
+    ball_vel_fixed = torch.zeros(num_samples, 2, device=device)
+    ball_force_fixed = torch.zeros(num_samples, 2, device=device)
 
-    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
-        td = env.reset()
-        dones = td.get("done", torch.zeros(1,1, dtype=torch.bool, device=device))
+    adv_pos_fixed = torch.tensor([1.0, 0.0], device=device).unsqueeze(0).expand(num_samples, 2) 
 
-        for step in range(config.max_steps):
-            if dones.all():
-                print(f"Episode ended early at step {step}/{config.max_steps}.")
-                break
+    goal_pos_fixed = env.scenario.right_goal_pos.clone()
+    goal_pos_fixed = goal_pos_fixed.unsqueeze(0).expand(num_samples, 2)
+    
+    obs_batch_temp = env.scenario.observation_base(
+        agent_pos=agent_pos_fixed,
+        agent_rot=agent_rot_fixed,
+        agent_vel=agent_vel_fixed,
+        agent_force=agent_force_fixed,
 
-            td = policy(td)
-            td = env.step(td)
-            frame = env.render(mode="rgb_array")
-            all_frames.append(frame)
-            dones = td.get("done", torch.zeros(1,1, dtype=torch.bool, device=device))
+        adversary_poses=[adv_pos_fixed],
+        adversary_forces=[agent_force_fixed],
+        adversary_vels=[agent_vel_fixed],
 
-        env.close()
+        teammate_poses=[], teammate_forces=[], teammate_vels=[],
+        ball_pos=ball_positions,
+        ball_vel=agent_vel_fixed,
+        ball_force=agent_force_fixed,
 
-    os.makedirs(os.path.dirname(gif_path), exist_ok=True)
-    imageio.mimsave(gif_path, all_frames, fps=30)
-    print(f"GIF saved to: {gif_path}")
+        goal_pos=goal_pos_fixed, 
+        blue=True,
+    )
 
+    obs_batch = obs_batch_temp.unsqueeze(1)
+
+    eval_td = TensorDict({
+        agent_key: TensorDict({'observation': obs_batch}, batch_size=[num_samples, 1])
+    }, batch_size=[num_samples], device=device)
+    
+    with torch.no_grad():
+        value_td = critic(eval_td)
+        V_s = value_td.get((agent_key, 'state_value')).squeeze().cpu().numpy()
+        
+        with set_exploration_type(ExplorationType.DETERMINISTIC):
+            policy_td = policy(eval_td)
+            Mu_x = policy_td.get((agent_key, 'loc'))[..., 0].cpu().numpy()
+            Mu_y = policy_td.get((agent_key, 'loc'))[..., 1].cpu().numpy()
+
+
+    V_s_grid = V_s.reshape(grid_points, grid_points)
+    Mu_x_grid = Mu_x.reshape(grid_points, grid_points)
+    Mu_y_grid = Mu_y.reshape(grid_points, grid_points)
+    
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    
+    # --- Plot 1: Value Function Heatmap ---
+    ax1 = axes[0]
+    norm = Normalize(vmin=V_s.min(), vmax=V_s.max())
+    
+    im = ax1.imshow(V_s_grid, origin='lower', 
+                    extent=[pitch_x_range[0], pitch_x_range[1], pitch_y_range[0], pitch_y_range[1]], 
+                    aspect='auto', cmap='viridis', norm=norm)
+    fig.colorbar(im, ax=ax1, label='Predicted Value $V(s)$')
+    
+    ax1.set_title(f'Value Function $V(s)$ (Ball Position)')
+    ax1.set_xlabel('Pitch X-Coordinate')
+    ax1.set_ylabel('Pitch Y-Coordinate')
+    ax1.axvline(x=0, color='gray', linestyle='--') # Center line
+    
+    # --- Plot 2: Policy Action Quiver Plot (Vector Field) ---
+    ax2 = axes[1]
+    
+    # Quiver plot uses subsampling to avoid cluttering the plot
+    subsample = 5
+    ax2.quiver(X_grid[::subsample, ::subsample], Y_grid[::subsample, ::subsample], 
+               Mu_x_grid[::subsample, ::subsample], Mu_y_grid[::subsample, ::subsample], 
+               scale=10, scale_units='x', color='red', alpha=0.8) # Adjust scale for better visualization
+    
+    # Overlay the Value Function heatmap for context
+    ax2.imshow(V_s_grid, origin='lower', 
+               extent=[pitch_x_range[0], pitch_x_range[1], pitch_y_range[0], pitch_y_range[1]], 
+               aspect='auto', cmap='Greys', alpha=0.3)
+    
+    ax2.set_title(f'Policy Mean Action $\\mu(s)$ Vector Field')
+    ax2.set_xlabel('Pitch X-Coordinate')
+    ax2.set_ylabel('Pitch Y-Coordinate')
+    ax2.axvline(x=0, color='gray', linestyle='--')
+    
+    plt.suptitle(f"Policy and Value Function Analysis (Agent: {agent_key})")
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+
+
+def plot_value_heatmap(V_s_grid, pitch_geometry):
+    """Plots the Value Function V(s) heatmap."""
+    
+    X_range, Y_range = pitch_geometry['X_range'], pitch_geometry['Y_range']
+    agent_key = pitch_geometry['agent_key']
+    
+    plt.figure(figsize=(8, 8)) # Use a square figure size for better visual aspect
+    ax = plt.gca()
+    
+    norm = Normalize(vmin=V_s_grid.min(), vmax=V_s_grid.max())
+    
+    im = ax.imshow(V_s_grid, origin='lower', 
+                   extent=[X_range[0], X_range[1], Y_range[0], Y_range[1]], 
+                   aspect='auto', cmap='viridis', norm=norm)
+    
+    plt.colorbar(im, ax=ax, label='Predicted Value $V(s)$')
+    
+    ax.set_title(f'Value Function $V(s)$ (Ball Position)')
+    ax.set_xlabel('Pitch X-Coordinate')
+    ax.set_ylabel('Pitch Y-Coordinate')
+    ax.axvline(x=0, color='white', linestyle='--') # Center line
+    
+    plt.suptitle(f"Value Analysis for {agent_key}")
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
     config = MAPPOConfig()
+    GRID_POINTS = 50
 
-    experiment = "mappo_football_011225_195207"
-    policy_number = "499"
+    checkpoint_path = "./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt"
 
-    saved_checkpoint_path = f"./saved_policies/{experiment}/iteration_{policy_number}_policy.pt"
-    timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
-    gif_path = f"./loaded_policy_rollouts/{experiment}_iter{policy_number}_{timestamp}.gif"
-
-    start_pos_dic = {
-        "blue_pos": [[-0.5, 0]],
-        "red_pos": None,
-        "ball_pos": None
-    }
-
-    simulate_rollout(saved_checkpoint_path, config, gif_path, start_pos_dic)
+    plot_value(checkpoint_path=checkpoint_path,
+               grid_points=GRID_POINTS)

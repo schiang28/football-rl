@@ -1250,7 +1250,7 @@ class FootballDesign(BaseScenario):
         return new_adversary_poses, new_adversary_vels, new_adversary_forces
 
 
-    def observation_base( self,
+    def observation_base(self,
         agent_pos, agent_rot, agent_vel, agent_force,
         teammate_poses, teammate_forces, teammate_vels,
         adversary_poses, adversary_forces, adversary_vels,
