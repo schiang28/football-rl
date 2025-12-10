@@ -436,7 +436,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
         training_tds = torch.stack(training_tds)
 
         # run evaluation every n episodes
-        if (log_iteration > 0 and log_iteration % config.evaluation_interval == 0):
+        if (log_iteration > 0 and ((log_iteration % config.evaluation_interval == 0) or (log_iteration + 1 == config.n_iters))):
             evaluate_agents(config, policy, logger, log_iteration, agent_key, device, asymmetries)
 
         # save checkpointed policy every n episodes

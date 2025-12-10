@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
+from matplotlib.patches import Rectangle
 
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from torchrl.envs import TransformedEnv
@@ -117,34 +118,69 @@ def run_inference(config, checkpoint_path, grid_points):
     pitch_geometry = {
         'X_grid': X_grid, 'Y_grid': Y_grid,
         'X_range': pitch_x_range, 'Y_range': pitch_y_range,
-        'agent_key': agent_key
+        'agent_key': agent_key,
+        'goal_depth': env.scenario.goal_depth,
+        'goal_size': env.scenario.goal_size
     }
 
     return eval_td, agent_key, pitch_geometry, policy, critic
 
 
-def plot_value_heatmap(pitch_geometry, grid_points, eval_td, agent_key, critic, save_path, save):
+def plot_value_heatmap(pitch_geometry, grid_points, eval_td, agent_key, critic, title, save_path, save):
     """Plots a heatmap of the football pitch from the value function. We use the critic to get the value of states."""
     with torch.no_grad():
         value_td = critic(eval_td)
         V_s = value_td.get((agent_key, 'state_value')).squeeze().cpu().numpy()
     V_s_grid = V_s.reshape(grid_points, grid_points)
 
-    plt.figure(figsize=(13, 6))
+    plt.figure(figsize=(12, 6))
     ax = plt.gca()
     norm = Normalize(vmin=V_s_grid.min(), vmax=V_s_grid.max())
 
     X_range, Y_range = pitch_geometry['X_range'], pitch_geometry['Y_range']
-    im = ax.imshow(V_s_grid, origin='lower', 
-                   extent=[X_range[0], X_range[1], Y_range[0], Y_range[1]], 
-                   aspect='auto', cmap='Greens', norm=norm)
-    
-    plt.colorbar(im, ax=ax, label='Value Function')
+    goal_depth, goal_size = pitch_geometry['goal_depth'], pitch_geometry['goal_size']
+    xmin, xmax, ymin, ymax = X_range[0], X_range[1], Y_range[0], Y_range[1]
+
+    im = ax.imshow(V_s_grid, origin='lower', extent=[xmin, xmax, ymin, ymax], aspect='auto', cmap='Greens', norm=norm)
     ax.axvline(x=0, color='lightgrey', linestyle='-')
+
+    left_goal = Rectangle(
+        (xmin, -goal_size / 2),
+        width=-goal_depth,
+        height=goal_size,
+        edgecolor='lightgrey',
+        facecolor='grey',
+        alpha=0.6,
+        linewidth=2,
+        zorder=10,
+        clip_on=False
+    )
+    ax.add_patch(left_goal)
+
+    right_goal= Rectangle(
+        (xmax, -goal_size / 2),
+        width=goal_depth,
+        height=goal_size,
+        edgecolor='lightgrey',
+        facecolor='grey',
+        alpha=0.6,
+        linewidth=2,
+        zorder=10,
+        clip_on=False
+    )
+    ax.add_patch(right_goal) 
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    ax.set_xticks([])
+    ax.set_yticks([])
     
-    ax.set_title(f'Pitch value function heatmap.')
-    ax.set_xlabel('X-Coordinate')
-    ax.set_ylabel('Y-Coordinate')
+    for spine in ax.spines.values():
+        spine.set_edgecolor('lightgrey')
+        spine.set_linewidth(2)
+
+    plt.colorbar(im, ax=ax, label='Value Function')
+    ax.set_title(f'Pitch value function heatmap for {title}')
     
     plt.tight_layout()
     if save:
@@ -204,11 +240,12 @@ if __name__ == "__main__":
     checkpoint, policy_no = "011225_195207", "499"
     checkpoint_path = f"./saved_policies/mappo_football_{checkpoint}/iteration_{policy_no}_policy.pt"
     save_path = f"plots/{checkpoint}_{policy_no}"
+    title = "1v1 play"
 
     eval_td, agent_key, pitch_geometry, policy, critic = run_inference(
         config=config,
         checkpoint_path=checkpoint_path,
         grid_points=GRID_POINTS)
 
-    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, save_path, save=False)
+    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, title, save_path, save=True)
     if PLOT_ACTION_VECTORS: plot_action_vectors(pitch_geometry, GRID_POINTS, eval_td, policy, critic, agent_key, save=False)
