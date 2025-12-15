@@ -495,10 +495,10 @@ if __name__ == "__main__":
     LOCAL = True
 
     asymmetries = {
-        "mask_pitch_lhs": False,
+        "mask_pitch_lhs": True,
         "mask_pitch_rhs": False,
         "mask_ball": False,
-        "mask_opponent": True,
+        "mask_opponent": False,
     }
 
     if LOCAL:

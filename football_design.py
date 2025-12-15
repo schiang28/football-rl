@@ -1195,6 +1195,7 @@ class FootballDesign(BaseScenario):
 
 
     def get_masked_pitch_observation(self, ball_pos, ball_vel, adversary_poses, adversary_vels):
+        """masking ball and opposing team information based on side of the pitch."""
         OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
         ZERO_VEL = torch.zeros_like(ball_vel)
 
@@ -1220,14 +1221,38 @@ class FootballDesign(BaseScenario):
             adv_vel = torch.where(mask_adv, ZERO_VEL, adv_vel)
             new_adversary_poses.append(adv_pos)
             new_adversary_vels.append(adv_vel)
-            
-        adversary_poses = new_adversary_poses
-        adversary_vels = new_adversary_vels
 
-        return ball_pos, ball_vel, adversary_poses, adversary_vels
+        return ball_pos, ball_vel, new_adversary_poses, new_adversary_vels
+
+
+    def get_masked_pitch_player_observation(self, agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels):
+        """masking ball and opposing team information based on the player position on the pitch."""
+        OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
+        ZERO_VEL = torch.zeros_like(ball_vel)
+
+        # mask lhs or right third using agent position
+        if self.mask_pitch_lhs: mask_agent = (agent_pos[..., X] <= -1.0)
+        elif self.mask_pitch_rhs: mask_agent = (agent_pos[..., X] >= 0.0)
+        mask_to_apply = mask_agent.unsqueeze(-1)
+        
+        # apply mask to ball position and velocity using arbitary tensors
+        ball_pos = torch.where(mask_to_apply, OUT_OF_BOUNDS_POS, ball_pos)
+        ball_vel = torch.where(mask_to_apply, ZERO_VEL, ball_vel)
+
+        # apply mask to red agents (the adversary team)
+        new_adversary_poses, new_adversary_vels = [], []
+        for adv_pos, adv_vel in zip(adversary_poses, adversary_vels):
+            adv_pos = torch.where(mask_to_apply, OUT_OF_BOUNDS_POS, adv_pos)
+            adv_vel = torch.where(mask_to_apply, ZERO_VEL, adv_vel)
+
+            new_adversary_poses.append(adv_pos)
+            new_adversary_vels.append(adv_vel)
+
+        return ball_pos, ball_vel, new_adversary_poses, new_adversary_vels
 
 
     def get_masked_ball_observation(self, ball_pos, ball_vel, ball_force):
+        """mask the ball information completely."""
         ball_pos = torch.full_like(ball_pos, 100.0)
         ball_vel = torch.zeros_like(ball_vel)
         ball_force = torch.zeros_like(ball_force)
@@ -1236,6 +1261,7 @@ class FootballDesign(BaseScenario):
 
     
     def get_masked_opponent_observation(self, adversary_poses, adversary_vels, adversary_forces):
+        """mask the opposing team information."""
         new_adversary_poses, new_adversary_vels, new_adversary_forces = [], [], []
 
         for adv_pos, adv_vel, adv_force in zip(adversary_poses, adversary_vels, adversary_forces):
@@ -1302,15 +1328,16 @@ class FootballDesign(BaseScenario):
         # If agent is blue i.e. our main players, change observation space if any information asymmetry
         else:
             if self.mask_pitch_lhs or self.mask_pitch_rhs:
-                ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_observation(ball_pos, ball_vel, adversary_poses, adversary_vels)
+                # ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_observation(ball_pos, ball_vel, adversary_poses, adversary_vels)
+                ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_player_observation(agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels)
             if self.mask_ball:
                 ball_pos, ball_vel, ball_force = self.get_masked_ball_observation(ball_pos, ball_vel, ball_force)
             if self.mask_opponent:
                 adversary_poses, adversary_vels, adversary_forces = self.get_masked_opponent_observation(adversary_poses, adversary_vels, adversary_forces)
 
         obs = {
-            "obs": [agent_force, agent_pos - ball_pos, agent_vel - ball_vel, ball_pos - goal_pos, ball_vel, ball_force],
-            "pos": [agent_pos - goal_pos],
+            "obs": [agent_force, agent_pos - ball_pos, agent_vel - ball_vel, ball_pos - goal_pos, ball_vel, ball_force], #  agent force, dis from agt to ball, vel to ball, dis from ball to goal, ball vel, ball force
+            "pos": [agent_pos - goal_pos], # dis from agt to goal
             "vel": [agent_vel],
         }
 

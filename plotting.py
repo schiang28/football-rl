@@ -55,25 +55,6 @@ def make_env(config, vmas_device):
     return env, agent_key
 
 
-def prepare_fixed_state(env, device, agent_key):
-    """Creates a TensorDict template where all state components except the ball's position are fixed to a canonical reference e.g. zero velocity, agents at origin."""
-    state_td = env.reset(inplace=True).clone()
-    state_td.get(agent_key)["velocity"].zero_()
-    state_td.get(agent_key)["force"].zero_()
-    state_td["Ball"]["velocity"].zero_()
-    state_td["Ball"]["force"].zero_()
-    
-    state_td.get(agent_key)["position"].zero_()
-
-    adv_key = f"agent_red_0" 
-    if adv_key in state_td.keys():
-        state_td.get(adv_key)["position"] = torch.tensor([1.0, 0.0], device=device)
-        state_td.get(adv_key)["velocity"].zero_()
-        state_td.get(adv_key)["force"].zero_()
-        
-    return state_td
-
-
 def run_inference(config, checkpoint_path, grid_points):
     """Loads policy and critic and generates the value and action plots."""
     print(f"Starting plotting. Loading policy from: {checkpoint_path}")
@@ -190,7 +171,7 @@ def plot_value_heatmap(pitch_geometry, grid_points, eval_td, agent_key, critic, 
     plt.show()
 
 
-def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, agent_key, subsample=5):
+def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, agent_key, sav_path, save, subsample=5):
     """Plots the policy mean action on the pitch like a vector field."""
     with torch.no_grad():
         value_td = critic(eval_td)
@@ -218,7 +199,7 @@ def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, ag
     
     ax.quiver(X_grid[::subsample, ::subsample], Y_grid[::subsample, ::subsample], 
                Mu_x_grid[::subsample, ::subsample], Mu_y_grid[::subsample, ::subsample], 
-               scale=10, scale_units='x', color='red', alpha=0.8)
+               scale=10, scale_units='x', color='green', alpha=0.7)
     
     ax.set_title(f'Policy Mean Action $\\mu(s)$ Vector Field')
     ax.set_xlabel('Pitch X-Coordinate')
@@ -227,6 +208,10 @@ def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, ag
     
     plt.suptitle(f"Policy Action Analysis for {agent_key}")
     plt.tight_layout()
+    if save:
+        save_path = f"{save_path}_val_policymap.pdf"
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
     plt.show()
 
 
@@ -237,15 +222,15 @@ if __name__ == "__main__":
     PLOT_VALUE_HEATMAP = True
     PLOT_ACTION_VECTORS = False
 
-    checkpoint, policy_no = "101225_181355", "1450"
+    checkpoint, policy_no = "151225_155536", "499"
     checkpoint_path = f"./saved_policies/mappo_football_{checkpoint}/iteration_{policy_no}_policy.pt"
     save_path = f"plots/{checkpoint}_{policy_no}"
-    title = "1v1 play masking lhs 1/3"
+    title = "1v1 play masking ball information"
 
     eval_td, agent_key, pitch_geometry, policy, critic = run_inference(
         config=config,
         checkpoint_path=checkpoint_path,
         grid_points=GRID_POINTS)
 
-    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, title, save_path, save=True)
-    if PLOT_ACTION_VECTORS: plot_action_vectors(pitch_geometry, GRID_POINTS, eval_td, policy, critic, agent_key, save=False)
+    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, title, save_path, save=False)
+    if PLOT_ACTION_VECTORS: plot_action_vectors(pitch_geometry, GRID_POINTS, eval_td, policy, critic, agent_key, save_path, save=False)
