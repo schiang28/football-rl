@@ -104,7 +104,10 @@ def make_env(config, vmas_device, asymmetries, show_specs, show_keys):
         mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
         mask_pitch_rhs=asymmetries["mask_pitch_rhs"],
         mask_ball=asymmetries["mask_ball"],
-        mask_opponent=asymmetries["mask_opponent"]
+        mask_opponent=asymmetries["mask_opponent"],
+        mask_opponent_by_distance=asymmetries["mask_opponent_by_distance"],
+        mask_ball_by_distance=asymmetries["mask_ball_by_distance"],
+        mask_if_far=asymmetries["mask_if_far"]
     )
 
     if show_specs:
@@ -341,7 +344,10 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
         mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
         mask_pitch_rhs=asymmetries["mask_pitch_rhs"],
         mask_ball=asymmetries["mask_ball"],
-        mask_opponent=asymmetries["mask_opponent"]
+        mask_opponent=asymmetries["mask_opponent"],
+        mask_opponent_by_distance=asymmetries["mask_opponent_by_distance"],
+        mask_ball_by_distance=asymmetries["mask_ball_by_distance"],
+        mask_if_far=asymmetries["mask_if_far"]
     )
 
     evaluation_start_time = time.time()
@@ -495,10 +501,13 @@ if __name__ == "__main__":
     LOCAL = True
 
     asymmetries = {
-        "mask_pitch_lhs": True,
+        "mask_pitch_lhs": False,
         "mask_pitch_rhs": False,
         "mask_ball": False,
         "mask_opponent": False,
+        "mask_opponent_by_distance": False,
+        "mask_ball_by_distance": True,
+        "mask_if_far": True # if masking by distance, set if masking depending on far or close to ball
     }
 
     if LOCAL:

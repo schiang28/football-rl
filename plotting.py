@@ -83,8 +83,7 @@ def run_inference(config, checkpoint_path, grid_points):
     goal_pos_fixed = env.scenario.right_goal_pos.clone().unsqueeze(0).expand(num_samples, 2)
     
     obs_batch = env.scenario.observation_base(
-        agent_pos=fixed_base_vector, agent_vel=fixed_base_vector, agent_force=fixed_base_vector,
-        agent_rot=torch.zeros(num_samples, 1, device=device), # rotation is only an angle
+        agent_pos=fixed_base_vector, agent_vel=fixed_base_vector, agent_force=fixed_base_vector, agent_rot=torch.zeros(num_samples, 1, device=device),
         adversary_poses=[adv_pos_fixed], adversary_forces=[fixed_base_vector], adversary_vels=[fixed_base_vector],
         teammate_poses=[], teammate_forces=[], teammate_vels=[],
         ball_pos=ball_positions, ball_vel=fixed_base_vector, ball_force=fixed_base_vector,
@@ -222,7 +221,7 @@ if __name__ == "__main__":
     PLOT_VALUE_HEATMAP = True
     PLOT_ACTION_VECTORS = False
 
-    checkpoint, policy_no = "151225_155536", "499"
+    checkpoint, policy_no = "151225_235205", "499"
     checkpoint_path = f"./saved_policies/mappo_football_{checkpoint}/iteration_{policy_no}_policy.pt"
     save_path = f"plots/{checkpoint}_{policy_no}"
     title = "1v1 play masking ball information"

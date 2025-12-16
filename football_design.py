@@ -93,6 +93,10 @@ class FootballDesign(BaseScenario):
         self.mask_ball = kwargs.pop("mask_ball", False)
         self.mask_opponent = kwargs.pop("mask_opponent", False)
 
+        self.mask_opponent_by_distance = kwargs.pop("mask_opponent_by_distance", False)
+        self.mask_ball_by_distance = kwargs.pop("mask_ball_by_distance", False)
+        self.mask_if_far = kwargs.pop("mask_if_far", True)
+
 
         if kwargs.pop("dense_reward_ratio", None) is not None:
             raise ValueError(
@@ -1265,15 +1269,69 @@ class FootballDesign(BaseScenario):
         new_adversary_poses, new_adversary_vels, new_adversary_forces = [], [], []
 
         for adv_pos, adv_vel, adv_force in zip(adversary_poses, adversary_vels, adversary_forces):
-            adv_pos = torch.full_like(adv_pos, 100.0)
-            adv_vel = torch.zeros_like(adv_vel)
-            adv_force = torch.zeros_like(adv_force)
+            new_adv_pos = torch.full_like(adv_pos, 100.0)
+            new_adv_vel = torch.zeros_like(adv_vel)
+            new_adv_force = torch.zeros_like(adv_force)
 
-            new_adversary_poses.append(adv_pos)
-            new_adversary_vels.append(adv_vel)
-            new_adversary_forces.append(adv_force)
+            new_adversary_poses.append(new_adv_pos)
+            new_adversary_vels.append(new_adv_vel)
+            new_adversary_forces.append(new_adv_force)
 
         return new_adversary_poses, new_adversary_vels, new_adversary_forces
+    
+
+    def get_masked_opponent_by_distance_observation(self, agent_pos, ball_pos, adversary_poses, adversary_vels, adversary_forces, mask_if_far):
+        """Masks all opponent information if the agent's distance to the ball exceeds a defined threshold."""
+        OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0])
+        ZERO_VEL_FORCE = torch.tensor([0.0, 0.0])
+        DISTANCE_THRESHOLD = 1.0
+        # shape all [num_envs, 2], each element in adversary is [num_envs, 2]
+        
+        pos_diff = agent_pos - ball_pos
+        distance_to_ball = torch.linalg.norm(pos_diff, dim=-1)
+
+        if mask_if_far:
+            mask_far_away = distance_to_ball > DISTANCE_THRESHOLD
+            mask_to_apply = mask_far_away.unsqueeze(-1) # shape [480, 1]
+        else:
+            mask_close = distance_to_ball < DISTANCE_THRESHOLD
+            mask_to_apply = mask_close.unsqueeze(-1) # shape [480, 1]
+        
+        new_adversary_poses, new_adversary_vels, new_adversary_forces = [], [], []
+        for adv_pos, adv_vel, adv_force in zip(adversary_poses, adversary_vels, adversary_forces):
+            masked_adv_pos = torch.where(mask_to_apply, OUT_OF_BOUNDS_POS, adv_pos)
+            masked_adv_vel = torch.where(mask_to_apply, ZERO_VEL_FORCE, adv_vel)
+            masked_adv_force = torch.where(mask_to_apply, ZERO_VEL_FORCE, adv_force)
+
+            new_adversary_poses.append(masked_adv_pos)
+            new_adversary_vels.append(masked_adv_vel)
+            new_adversary_forces.append(masked_adv_force)
+
+        return new_adversary_poses, new_adversary_vels, new_adversary_forces
+
+
+    def get_masked_ball_by_distance_observation(self, agent_pos, ball_pos, ball_vel, ball_force, mask_if_far):
+        """Masks all ball information if the agent's distance to the ball exceeds a defined threshold."""
+        OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0])
+        ZERO_VEL_FORCE = torch.tensor([0.0, 0.0])
+        DISTANCE_THRESHOLD = 1.0
+        # shape all [num_envs, 2], each element in adversary is [num_envs, 2]
+        
+        pos_diff = agent_pos - ball_pos
+        distance_to_ball = torch.linalg.norm(pos_diff, dim=-1)
+
+        if mask_if_far:
+            mask_far_away = distance_to_ball > DISTANCE_THRESHOLD
+            mask_to_apply = mask_far_away.unsqueeze(-1) # shape [480, 1]
+        else:
+            mask_close = distance_to_ball < DISTANCE_THRESHOLD
+            mask_to_apply = mask_close.unsqueeze(-1) # shape [480, 1]
+        
+        new_ball_pos = torch.where(mask_to_apply, OUT_OF_BOUNDS_POS, ball_pos)
+        new_ball_vel = torch.where(mask_to_apply, ZERO_VEL_FORCE, ball_vel)
+        new_ball_force = torch.where(mask_to_apply, ZERO_VEL_FORCE, ball_force)
+
+        return new_ball_pos, new_ball_vel, new_ball_force
 
 
     def observation_base(self,
@@ -1334,6 +1392,10 @@ class FootballDesign(BaseScenario):
                 ball_pos, ball_vel, ball_force = self.get_masked_ball_observation(ball_pos, ball_vel, ball_force)
             if self.mask_opponent:
                 adversary_poses, adversary_vels, adversary_forces = self.get_masked_opponent_observation(adversary_poses, adversary_vels, adversary_forces)
+            if self.mask_opponent_by_distance:
+                adversary_poses, adversary_vels, adversary_forces = self.get_masked_opponent_by_distance_observation(agent_pos, ball_pos, adversary_poses, adversary_vels, adversary_forces, mask_if_far=self.mask_if_far)
+            if self.mask_ball_by_distance:
+                ball_pos, ball_vel, ball_force = self.get_masked_ball_by_distance_observation(agent_pos, ball_pos, ball_vel, ball_force, mask_if_far=self.mask_if_far)
 
         obs = {
             "obs": [agent_force, agent_pos - ball_pos, agent_vel - ball_vel, ball_pos - goal_pos, ball_vel, ball_force], #  agent force, dis from agt to ball, vel to ball, dis from ball to goal, ball vel, ball force
