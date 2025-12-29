@@ -233,6 +233,7 @@ if __name__ == "__main__":
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     gif_path = f"./loaded_policy_rollouts/{experiment}_iter{policy_number}_{timestamp}.gif"
 
+    # custom starting configurations e.g. position
     start_pos_dic = {
         "blue_pos": None, #[[-0.5, 0]],
         "red_pos": None,

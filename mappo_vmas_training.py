@@ -500,14 +500,24 @@ if __name__ == "__main__":
     USE_WANDB = True
     LOCAL = True
 
+    """information asymmetry flags
+    - mask_pitch_lhs: Mask the left half or third of the pitch (either fully or dependent on agent position)
+    - mask_pitch_rhs: Mask the right half of the pitch (either fully or dependent on agenet position)
+    - mask_ball: Mask the ball position and velocity
+    - mask_opponent: Mask opponent position and velocity
+    - mask_ball_by_distance: Mask opponent position and velocity dependant on agent's distance to the ball
+    - mask_opponent_by_distance: Mask ball position and velocity dependant on agent's distance to the ball
+
+    - mask_if_far: If using any by_distance asymmetry flags, set if masking occurs whether agent is far vs close to the ball"""
+
     asymmetries = {
         "mask_pitch_lhs": False,
         "mask_pitch_rhs": False,
         "mask_ball": False,
         "mask_opponent": False,
-        "mask_opponent_by_distance": False,
         "mask_ball_by_distance": True,
-        "mask_if_far": True # if masking by distance, set if masking depending on far or close to ball
+        "mask_opponent_by_distance": False,
+        "mask_if_far": True
     }
 
     if LOCAL:

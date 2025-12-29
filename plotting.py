@@ -79,11 +79,13 @@ def run_inference(config, checkpoint_path, grid_points):
     num_samples = len(ball_positions)
 
     fixed_base_vector = torch.zeros(num_samples, 2, device=device)
+    fixed_rot_vector = torch.zeros(num_samples, 1, device=device)
     adv_pos_fixed = torch.tensor([1.0, 0.0], device=device).unsqueeze(0).expand(num_samples, 2) 
     goal_pos_fixed = env.scenario.right_goal_pos.clone().unsqueeze(0).expand(num_samples, 2)
+    # all shape [40000, 2]
     
     obs_batch = env.scenario.observation_base(
-        agent_pos=fixed_base_vector, agent_vel=fixed_base_vector, agent_force=fixed_base_vector, agent_rot=torch.zeros(num_samples, 1, device=device),
+        agent_pos=fixed_base_vector, agent_vel=fixed_base_vector, agent_force=fixed_base_vector, agent_rot=fixed_rot_vector,
         adversary_poses=[adv_pos_fixed], adversary_forces=[fixed_base_vector], adversary_vels=[fixed_base_vector],
         teammate_poses=[], teammate_forces=[], teammate_vels=[],
         ball_pos=ball_positions, ball_vel=fixed_base_vector, ball_force=fixed_base_vector,
@@ -221,15 +223,15 @@ if __name__ == "__main__":
     PLOT_VALUE_HEATMAP = True
     PLOT_ACTION_VECTORS = False
 
-    checkpoint, policy_no = "151225_235205", "499"
-    checkpoint_path = f"./saved_policies/mappo_football_{checkpoint}/iteration_{policy_no}_policy.pt"
-    save_path = f"plots/{checkpoint}_{policy_no}"
-    title = "1v1 play masking ball information"
+    checkpoint_id, policy_no = "151225_153848", "499"
+    checkpoint_path = f"./saved_policies/mappo_football_{checkpoint_id}/iteration_{policy_no}_policy.pt"
+    save_path = f"plots/{checkpoint_id}_{policy_no}"
+    title = "1v1 play masking opponent information"
 
     eval_td, agent_key, pitch_geometry, policy, critic = run_inference(
         config=config,
         checkpoint_path=checkpoint_path,
         grid_points=GRID_POINTS)
 
-    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, title, save_path, save=False)
+    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, title, save_path, save=True)
     if PLOT_ACTION_VECTORS: plot_action_vectors(pitch_geometry, GRID_POINTS, eval_td, policy, critic, agent_key, save_path, save=False)

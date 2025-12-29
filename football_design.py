@@ -1199,7 +1199,7 @@ class FootballDesign(BaseScenario):
 
 
     def get_masked_pitch_observation(self, ball_pos, ball_vel, adversary_poses, adversary_vels):
-        """masking ball and opposing team information based on side of the pitch."""
+        """masking ball and opposing team information based on side of the pitch .e.g. mask the information on the rhs of the pitch."""
         OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
         ZERO_VEL = torch.zeros_like(ball_vel)
 
@@ -1217,9 +1217,9 @@ class FootballDesign(BaseScenario):
         new_adversary_poses, new_adversary_vels = [], []
         for adv_pos, adv_vel in zip(adversary_poses, adversary_vels):
             mask_adv = torch.zeros_like(adv_pos[..., X], dtype=torch.bool)
-            if self.mask_pitch_lhs: mask_adv = mask_adv | (adv_pos[..., X] < -1.0)
-            if self.mask_pitch_rhs: mask_adv = mask_adv | (adv_pos[..., X] > 0.0)
-            mask_adv = mask_adv.unsqueeze(-1)
+            if self.mask_pitch_lhs: mask_adv = mask_adv | (adv_pos[..., X] < -1.0) # shape [480]
+            if self.mask_pitch_rhs: mask_adv = mask_adv | (adv_pos[..., X] > 0.0) # shape [480]
+            mask_adv = mask_adv.unsqueeze(-1)  # shape [480, 1]
             
             adv_pos = torch.where(mask_adv, OUT_OF_BOUNDS_POS, adv_pos)
             adv_vel = torch.where(mask_adv, ZERO_VEL, adv_vel)
@@ -1230,7 +1230,7 @@ class FootballDesign(BaseScenario):
 
 
     def get_masked_pitch_player_observation(self, agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels):
-        """masking ball and opposing team information based on the player position on the pitch."""
+        """masking ball and opposing team information based on the player position on the pitch e.g. mask information if player is rhs of the pitch."""
         OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
         ZERO_VEL = torch.zeros_like(ball_vel)
 
@@ -1269,13 +1269,9 @@ class FootballDesign(BaseScenario):
         new_adversary_poses, new_adversary_vels, new_adversary_forces = [], [], []
 
         for adv_pos, adv_vel, adv_force in zip(adversary_poses, adversary_vels, adversary_forces):
-            new_adv_pos = torch.full_like(adv_pos, 100.0)
-            new_adv_vel = torch.zeros_like(adv_vel)
-            new_adv_force = torch.zeros_like(adv_force)
-
-            new_adversary_poses.append(new_adv_pos)
-            new_adversary_vels.append(new_adv_vel)
-            new_adversary_forces.append(new_adv_force)
+            new_adversary_poses.append(torch.full_like(adv_pos, 100.0))
+            new_adversary_vels.append(torch.zeros_like(adv_vel))
+            new_adversary_forces.append(torch.zeros_like(adv_force))
 
         return new_adversary_poses, new_adversary_vels, new_adversary_forces
     
@@ -1315,7 +1311,7 @@ class FootballDesign(BaseScenario):
         OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0])
         ZERO_VEL_FORCE = torch.tensor([0.0, 0.0])
         DISTANCE_THRESHOLD = 1.0
-        # shape all [num_envs, 2], each element in adversary is [num_envs, 2]
+        # shape each agent and ball pos or vel is [num_envs, 2 (x,y)], force will be [num_envs, 1 (deg)]
         
         pos_diff = agent_pos - ball_pos
         distance_to_ball = torch.linalg.norm(pos_diff, dim=-1)
@@ -1373,7 +1369,6 @@ class FootballDesign(BaseScenario):
             adversary_poses, adversary_forces, adversary_vels,
         ) = input
 
-
         # If agent is red we have to flip the x of sign of each observation
         if (not blue):  
             for tensor in (
@@ -1386,6 +1381,7 @@ class FootballDesign(BaseScenario):
         # If agent is blue i.e. our main players, change observation space if any information asymmetry
         else:
             if self.mask_pitch_lhs or self.mask_pitch_rhs:
+                # either mask depending on position of the agent or mask no matter what
                 # ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_observation(ball_pos, ball_vel, adversary_poses, adversary_vels)
                 ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_player_observation(agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels)
             if self.mask_ball:
@@ -1399,7 +1395,7 @@ class FootballDesign(BaseScenario):
 
         obs = {
             "obs": [agent_force, agent_pos - ball_pos, agent_vel - ball_vel, ball_pos - goal_pos, ball_vel, ball_force], #  agent force, dis from agt to ball, vel to ball, dis from ball to goal, ball vel, ball force
-            "pos": [agent_pos - goal_pos], # dis from agt to goal
+            "pos": [agent_pos - goal_pos], # dis from agent to goal
             "vel": [agent_vel],
         }
 
