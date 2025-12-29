@@ -232,14 +232,23 @@ def create_loss(config, env, policy, critic, agent_key):
     return loss_module
 
 
-def setup_loggers(config, use_wandb, timestamp, local):
+def setup_loggers(config, use_wandb, timestamp, local, asymmetries):
     """Setup tqdm logger and WanDB logger if used."""
-    if use_wandb and local:
-        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="fb_mappo_tests", log_dir="./wandb_logs")
-    elif use_wandb and not local:
-        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs")
+    active, tags = [k for k, v in asymmetries.items() if v], []
+
+    if not active: group = "baseline"
     else:
-        logger = DummyLogger()  
+        # custom tagging and grouping conditions
+        if (any(t in active for t in ["mask_ball_by_distance", "mask_opponent_by_distance"])) and (extra := "mask_if_far") in active:
+            tags.append(extra)
+            active.remove(extra)
+        group = active[0]
+
+    if use_wandb and local:
+        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="fb_mappo_tests", log_dir="./wandb_logs", tags=tags, group=group)
+    elif use_wandb and not local:
+        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs", tags=tags, group=group)
+    else: logger = DummyLogger()  
 
     pbar = tqdm(total=config.n_iters, desc="episode_reward_mean = 0")
 
@@ -376,7 +385,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
     loss_module = create_loss(config, env, policy, critic, agent_key)
 
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
-    logger, pbar = setup_loggers(config, use_wandb, timestamp, local)
+    logger, pbar = setup_loggers(config, use_wandb, timestamp, local, asymmetries)
 
     log_iteration = 0
     total_time = 0
@@ -500,24 +509,14 @@ if __name__ == "__main__":
     USE_WANDB = True
     LOCAL = True
 
-    """Information asymmetry flags
-    - mask_pitch_lhs: Mask the left half or third of the pitch (either fully or dependent on agent position)
-    - mask_pitch_rhs: Mask the right half of the pitch (either fully or dependent on agenet position)
-    - mask_ball: Mask the ball position and velocity
-    - mask_opponent: Mask opponent position and velocity
-    - mask_ball_by_distance: Mask ball position and velocity dependant on agent's distance to the ball
-    - mask_opponent_by_distance: Mask opponent position and velocity dependant on agent's distance to the ball
-
-    - mask_if_far: If using any by_distance asymmetry flags, set if masking occurs whether agent is far vs close to the ball"""
-
     asymmetries = {
         "mask_pitch_lhs": False,
         "mask_pitch_rhs": False,
         "mask_ball": False,
-        "mask_opponent": False,
-        "mask_ball_by_distance": True,
+        "mask_opponent": True,
+        "mask_ball_by_distance": False,
         "mask_opponent_by_distance": False,
-        "mask_if_far": True
+        "mask_if_far": False
     }
 
     if LOCAL:
