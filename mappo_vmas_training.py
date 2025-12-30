@@ -75,9 +75,6 @@ class MAPPOConfig:
     num_checkpoints = 10 # how many policies will be saved during training
     checkpoint_interval = n_iters // num_checkpoints
 
-    # Curriculum learning for AI opponent
-    num_increments = 3
-
 
 
 def setup_environment():
@@ -367,9 +364,8 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
 
 
-def get_opponent_strength(config, log_iteration, asymmetries):
+def get_opponent_strength(config, log_iteration, asymmetries, num_increments):
     """Use curriculum learning by setting AI opponent strength level by using a discrete number of increments to gradually step up AI strength ending at the defined maximum strength by end of training."""
-    num_increments = config.num_increments
     start_strength = asymmetries["ai_strength"]
     
     if num_increments == 1:
@@ -383,7 +379,7 @@ def get_opponent_strength(config, log_iteration, asymmetries):
     return strength
 
 
-def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, load_checkpoint_path=None):
+def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path=None):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -489,9 +485,9 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
         )
         log_iteration += 1
 
-        # set AI opponent strength
-        if asymmetries["ai_strength"] < 1.0:
-            ai_strength = get_opponent_strength(config, log_iteration, asymmetries)
+        # set AI opponent strength if we are using more than one increment
+        if ai_increments > 1:
+            ai_strength = get_opponent_strength(config, log_iteration, asymmetries, ai_increments)
             collector.env.scenario.ai_strength = ai_strength
             collector.env.scenario.ai_decision_strength = ai_strength
             collector.env.scenario.ai_precision_strength = ai_strength
@@ -523,6 +519,7 @@ if __name__ == "__main__":
     SAVE_POLICY = False
     USE_WANDB = True
     LOCAL = True
+    AI_INCREMENTS = 1
 
     asymmetries = {
         "mask_pitch_lhs": False,
@@ -567,5 +564,6 @@ if __name__ == "__main__":
         use_wandb=USE_WANDB,
         save_policies=SAVE_POLICY,
         local=LOCAL,
+        ai_increments=AI_INCREMENTS,
         load_checkpoint_path=load_checkpoint_path
     )
