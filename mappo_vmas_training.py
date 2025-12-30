@@ -36,15 +36,15 @@ class MAPPOConfig:
     max_steps = 500 # max no. timesteps per episode (def. 500)
     scenario_name = "football"
     scenario = FootballDesign
-    b_agents = 1
+    b_agents = 2
     r_agents = 1
     n_agents = b_agents + r_agents
     observe_teammates = b_agents > 1
 
     # Model
     mappo = True
-    share_parameters_policy = True
-    share_parameters_critic = True
+    share_parameters_policy = b_agents == 1 # true if just 1v1 play, otherwise don't share params
+    share_parameters_critic = b_agents == 1 # true if just 1v1 play, otherwse don't share params
     num_cells = 256 # size of each layer in nn
     depth = 2 # no. hidden layer in policy/value networks
 
@@ -77,9 +77,9 @@ class MAPPOConfig:
 
 
 
-def setup_environment():
+def setup_environment(seed):
     """Determines device, sets seed and configures torch/tensordict settings."""
-    torch.manual_seed(0)
+    torch.manual_seed(seed)
     is_fork = multiprocessing.get_start_method() == "fork"
     device = torch.device(0 if torch.cuda.is_available() and not is_fork else "cpu")
     vmas_device = device
@@ -379,7 +379,42 @@ def get_opponent_strength(config, log_iteration, asymmetries, num_increments):
     return strength
 
 
-def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path=None):
+def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path):
+    if config.b_agents == 1:
+        checkpoint = torch.load(load_checkpoint_path[0], map_location=device)
+        policy.load_state_dict(checkpoint['policy_state_dict'])
+        critic.load_state_dict(checkpoint['critic_state_dict'])
+        optim.load_state_dict(checkpoint['optimizer_state_dict'])
+        log_iteration = checkpoint['iteration'] + 1
+
+    else: # if more than once policy is needed, e.g. in 2v1
+        checkpoint_0, checkpoint_1 = load_checkpoint_path
+        checkpoints = [torch.load(checkpoint_0, map_location=device), torch.load(checkpoint_1, map_location=device)]
+
+        new_policy_dict = policy.state_dict()
+        new_critic_dict = critic.state_dict()
+
+        for i in range(config.b_agents):
+            print(checkpoints[i]['policy_state_dict'].items())
+            for key, value in checkpoints[i]['policy_state_dict'].items():
+                new_key = key.replace("agent_network", f"agent_networks.{i}")
+                if new_key in new_policy_dict: new_policy_dict[new_key] = value
+            
+            for key, value in checkpoints[i]['critic_state_dict'].items():
+                new_key = key.replace("agent_network", f"agent_networks.{i}")
+                if new_key in new_critic_dict: new_critic_dict[new_key] = value
+
+        policy.load_state_dict(new_policy_dict)
+        critic.load_state_dict(new_critic_dict)
+        log_iteration = checkpoints[0]['iteration'] + 1
+
+    total_frames_collected = log_iteration * config.frames_per_batch
+    print(f"Loaded {config.b_agents} distinct policies into the team.")
+
+    return log_iteration, total_frames_collected
+
+
+def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -387,7 +422,6 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
     collector = create_collector(config, env, policy, vmas_device, device, total_frames)
     replay_buffer = create_buffer(config)
     loss_module = create_loss(config, env, policy, critic, agent_key)
-
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
     logger, pbar = setup_loggers(config, use_wandb, timestamp, local, asymmetries)
 
@@ -396,14 +430,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
     total_frames_collected = 0
 
     # If pre-trained policy provided, load that first
-    if load_checkpoint_path:
-        checkpoint = torch.load(load_checkpoint_path, map_location=device)
-        policy.load_state_dict(checkpoint['policy_state_dict'])
-        critic.load_state_dict(checkpoint['critic_state_dict'])
-        optim.load_state_dict(checkpoint['optimizer_state_dict'])
-        log_iteration = checkpoint['iteration'] + 1
-        total_frames_collected = log_iteration * config.frames_per_batch
-        print(f"Loaded policy {load_checkpoint_path}")
+    if load_checkpoint_path: log_iteration, total_frames_collected = get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path)
 
     for tensordict_data in collector:
         iteration_start_time = time.time()
@@ -544,11 +571,14 @@ if __name__ == "__main__":
         config.num_epochs = 10
         config.minibatch_size = 128
 
-    if LOAD_POLICY: load_checkpoint_path = f"./saved_policies/mappo_football_241125_114610/iteration_99_policy.pt"
+    if LOAD_POLICY:
+        load_checkpoint_path = ["./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt"] # first policy
+        if config.b_agents > 1:
+            load_checkpoint_path.append("./saved_policies/mappo_football_091225_174907/iteration_1950_policy.pt") # second policy if needed
     else: load_checkpoint_path = None
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
-    vmas_device, device = setup_environment()
+    vmas_device, device = setup_environment(seed=0)
     env, agent_key = make_env(config, device, asymmetries, show_specs=False, show_keys=True)
     policy, critic = build_mappo_modules(env, config, device, agent_key)
     
