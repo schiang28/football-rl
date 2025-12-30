@@ -1,9 +1,10 @@
 import torch
-import imageio, os
+import os
 from tqdm import tqdm
 import datetime
 import time
 import numpy as np
+from math import floor
 
 from tensordict.nn import set_composite_lp_aggregate, TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
@@ -74,6 +75,9 @@ class MAPPOConfig:
     num_checkpoints = 10 # how many policies will be saved during training
     checkpoint_interval = n_iters // num_checkpoints
 
+    # Curriculum learning for AI opponent
+    num_increments = 3
+
 
 
 def setup_environment():
@@ -101,13 +105,7 @@ def make_env(config, vmas_device, asymmetries, show_specs, show_keys):
         n_blue_agents=config.b_agents,
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
-        mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
-        mask_pitch_rhs=asymmetries["mask_pitch_rhs"],
-        mask_ball=asymmetries["mask_ball"],
-        mask_opponent=asymmetries["mask_opponent"],
-        mask_opponent_by_distance=asymmetries["mask_opponent_by_distance"],
-        mask_ball_by_distance=asymmetries["mask_ball_by_distance"],
-        mask_if_far=asymmetries["mask_if_far"]
+        **asymmetries
     )
 
     if show_specs:
@@ -350,13 +348,7 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
         n_red_agents=config.r_agents,
         observe_teammates=config.observe_teammates,
         render_mode="rgb_array",
-        mask_pitch_lhs=asymmetries["mask_pitch_lhs"],
-        mask_pitch_rhs=asymmetries["mask_pitch_rhs"],
-        mask_ball=asymmetries["mask_ball"],
-        mask_opponent=asymmetries["mask_opponent"],
-        mask_opponent_by_distance=asymmetries["mask_opponent_by_distance"],
-        mask_ball_by_distance=asymmetries["mask_ball_by_distance"],
-        mask_if_far=asymmetries["mask_if_far"]
+        **asymmetries
     )
 
     evaluation_start_time = time.time()
@@ -373,6 +365,22 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
 
         evaluation_time = time.time() - evaluation_start_time
         log_evaluation_metrics(logger, rollouts, eval_env, evaluation_time, log_iteration, agent_key)
+
+
+def get_opponent_strength(config, log_iteration, asymmetries):
+    """Use curriculum learning by setting AI opponent strength level by using a discrete number of increments to gradually step up AI strength ending at the defined maximum strength by end of training."""
+    num_increments = config.num_increments
+    start_strength = asymmetries["ai_strength"]
+    
+    if num_increments == 1:
+        return start_strength
+
+    step_size = config.n_iters // num_increments
+    curr_step_idx = min(floor(log_iteration / step_size), num_increments - 1)
+    growth_per_step = (0.9 - start_strength) / (num_increments - 1)
+    strength = start_strength + (curr_step_idx * growth_per_step)
+
+    return strength
 
 
 def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, load_checkpoint_path=None):
@@ -481,6 +489,13 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
         )
         log_iteration += 1
 
+        # set AI opponent strength
+        if asymmetries["ai_strength"] < 1.0:
+            ai_strength = get_opponent_strength(config, log_iteration, asymmetries)
+            collector.env.scenario.ai_strength = ai_strength
+            collector.env.scenario.ai_decision_strength = ai_strength
+            collector.env.scenario.ai_precision_strength = ai_strength
+
     return policy
 
 
@@ -516,7 +531,12 @@ if __name__ == "__main__":
         "mask_opponent": True,
         "mask_ball_by_distance": False,
         "mask_opponent_by_distance": False,
-        "mask_if_far": False
+        "mask_if_far": False,
+
+        # opponent settings
+        "ai_strength": 0.5,
+        "ai_decision_strength": 0.5,
+        "ai_precision_strength": 0.5,
     }
 
     if LOCAL:

@@ -42,9 +42,9 @@ class FootballDesign(BaseScenario):
 
         # Ai config
         self.n_traj_points = kwargs.pop("n_traj_points", 0)  # Number of spline trajectory points to plot for heuristic (ai) agents
-        self.ai_speed_strength = kwargs.pop("ai_strength", 1.0)  # The speed of the ai 0<=x<=1
-        self.ai_decision_strength = kwargs.pop("ai_decision_strength", 1.0)  # The decision strength of the ai 0<=x<=1
-        self.ai_precision_strength = kwargs.pop("ai_precision_strength", 1.0)  # The precision strength of the ai 0<=x<=1
+        self.ai_speed_strength = kwargs.pop("ai_strength", 0.5)  # The speed of the ai 0<=x<=1
+        self.ai_decision_strength = kwargs.pop("ai_decision_strength", 0.5)  # The decision strength of the ai 0<=x<=1
+        self.ai_precision_strength = kwargs.pop("ai_precision_strength", 0.5)  # The precision strength of the ai 0<=x<=1
         self.disable_ai_red = kwargs.pop("disable_ai_red", False)
 
         # Task sizes
