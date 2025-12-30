@@ -8,10 +8,10 @@ This project also explores the role of how information asymmetry and policy comp
 
 | Flag | Category | Logic Description |
 | :--- | :--- | :--- |
-| **`mask_pitch_lhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is $< 0.0$ (Left Half) or $< -1.0$ (Left Third) of the pitch. |
-| **`mask_pitch_rhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is $> 0.0$ (Right Half) of the pitch. |
-| **`mask_pitch_bhs`** | **Spatial** | Agent is "blind" to external objects when its own $Y$-coordinate is $< 0.0$ (Bottom Half) of the pitch. |
-| **`mask_pitch_ths`** | **Spatial** | Agent is "blind" to external objects when its own $Y$-coordinate is $> 0.0$ (Right Half) of the pitch. |
+| **`mask_pitch_lhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is e.g. $< 0.0$ (Left Half) of the pitch. |
+| **`mask_pitch_rhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is e.g. $> 0.0$ (Right Half) of the pitch. |
+| **`mask_pitch_bhs`** | **Spatial** | Agent is "blind" to external objects when its own $Y$-coordinate is e.g. $< 0.0$ (Bottom Half) of the pitch. |
+| **`mask_pitch_ths`** | **Spatial** | Agent is "blind" to external objects when its own $Y$-coordinate is e.g. $> 0.0$ (Right Half) of the pitch. |
 | **`mask_ball`** | **Sensory** | Masks ball information e.g. position and velocity from agent during training. |
 | **`mask_opponent`** | **Sensory** | Masks opponent information e.g. position and velocity from agent during training. |
 | **`mask_ball_by_distance`** | **Proximity** | Ball information is masked dependant on `DISTANCE_THRESHOLD` and the distance between the agent and the ball. |

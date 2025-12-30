@@ -1238,9 +1238,9 @@ class FootballDesign(BaseScenario):
         ZERO_VEL = torch.tensor([0.0, 0.0])
 
         # mask lhs or right third using agent position
-        left_third = (-self.pitch_length / 2) + (self.pitch_length / 3)
-        if self.mask_pitch_lhs: mask_agent = (agent_pos[..., X] <= left_third)
-        elif self.mask_pitch_rhs: mask_agent = (agent_pos[..., X] >= 0.0)
+        left_zone = (-self.pitch_length / 2) + (self.pitch_length / 6) # -1.0
+        if self.mask_pitch_lhs: mask_agent = (agent_pos[..., X] < left_zone)
+        elif self.mask_pitch_rhs: mask_agent = (agent_pos[..., X] > 0.0)
         mask_to_apply = mask_agent.unsqueeze(-1)
         
         # apply mask to ball position and velocity using arbitary tensors
@@ -1264,9 +1264,10 @@ class FootballDesign(BaseScenario):
         OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0])
         ZERO_VEL = torch.tensor([0.0, 0.0])
 
-        # mask top or bottom half using agent position
-        if self.mask_pitch_bhs: mask_agent = (agent_pos[..., Y] <= 0.0) # shape [num_envs (bool)]
-        elif self.mask_pitch_ths: mask_agent = (agent_pos[..., Y] >= 0.0) # shape [num_envs (bool)]
+        # mask top or bottom half using agent position, or third
+        top_third = (self.pitch_width / 2) - (self.pitch_width / 3)
+        if self.mask_pitch_bhs: mask_agent = (agent_pos[..., Y] < -top_third) # shape [num_envs (bool)]
+        elif self.mask_pitch_ths: mask_agent = (agent_pos[..., Y] > top_third) # shape [num_envs (bool)]
         mask_to_apply = mask_agent.unsqueeze(-1) # shape [num_envs, 1 (bool)]
         
         # apply mask to ball position and velocity using arbitary tensors
