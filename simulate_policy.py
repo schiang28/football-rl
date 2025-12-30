@@ -226,12 +226,12 @@ def record_rollout(policy, config, device, gif_path):
 if __name__ == "__main__":
     config = MAPPOConfig()
 
-    experiment = "mappo_football_011225_195207"
-    policy_number = "499"
+    experiment = "mappo_football_031225_133315"
+    policy_number = "2950"
 
     saved_checkpoint_path = f"./saved_policies/{experiment}/iteration_{policy_number}_policy.pt"
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
-    gif_path = f"./loaded_policy_rollouts/{experiment}_iter{policy_number}_{timestamp}.gif"
+    gif_path = f"./videos/{experiment}_iter{policy_number}_{timestamp}.gif"
 
     # custom starting configurations e.g. position
     start_pos_dic = {
