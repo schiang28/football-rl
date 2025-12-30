@@ -366,14 +366,14 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
 
 def get_opponent_strength(config, log_iteration, asymmetries, num_increments):
     """Use curriculum learning by setting AI opponent strength level by using a discrete number of increments to gradually step up AI strength ending at the defined maximum strength by end of training."""
-    start_strength = asymmetries["ai_strength"]
+    start_strength = asymmetries["ai_decision_strength"]
     
     if num_increments == 1:
         return start_strength
 
     step_size = config.n_iters // num_increments
     curr_step_idx = min(floor(log_iteration / step_size), num_increments - 1)
-    growth_per_step = (0.9 - start_strength) / (num_increments - 1)
+    growth_per_step = (1.0 - start_strength) / (num_increments - 1)
     strength = start_strength + (curr_step_idx * growth_per_step)
 
     return strength
@@ -488,7 +488,6 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
         # set AI opponent strength if we are using more than one increment
         if ai_increments > 1:
             ai_strength = get_opponent_strength(config, log_iteration, asymmetries, ai_increments)
-            collector.env.scenario.ai_strength = ai_strength
             collector.env.scenario.ai_decision_strength = ai_strength
             collector.env.scenario.ai_precision_strength = ai_strength
 
@@ -524,14 +523,16 @@ if __name__ == "__main__":
     asymmetries = {
         "mask_pitch_lhs": False,
         "mask_pitch_rhs": False,
+        "mask_pitch_bhs": True,
+        "mask_pitch_ths": False,
         "mask_ball": False,
-        "mask_opponent": True,
+        "mask_opponent": False,
         "mask_ball_by_distance": False,
         "mask_opponent_by_distance": False,
         "mask_if_far": False,
 
         # opponent settings
-        "ai_strength": 0.5,
+        "ai_strength": 1.0,
         "ai_decision_strength": 0.5,
         "ai_precision_strength": 0.5,
     }

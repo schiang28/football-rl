@@ -90,6 +90,9 @@ class FootballDesign(BaseScenario):
         # Information Asymmetry flags
         self.mask_pitch_lhs = kwargs.pop("mask_pitch_lhs", False)
         self.mask_pitch_rhs = kwargs.pop("mask_pitch_rhs", False)
+        self.mask_pitch_bhs = kwargs.pop("mask_pitch_bhs", False)
+        self.mask_pitch_ths = kwargs.pop("mask_pitch_ths", False)
+
         self.mask_ball = kwargs.pop("mask_ball", False)
         self.mask_opponent = kwargs.pop("mask_opponent", False)
 
@@ -1229,15 +1232,42 @@ class FootballDesign(BaseScenario):
         return ball_pos, ball_vel, new_adversary_poses, new_adversary_vels
 
 
-    def get_masked_pitch_player_observation(self, agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels):
-        """masking ball and opposing team information based on the player position on the pitch e.g. mask information if player is rhs of the pitch."""
-        OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0], device=ball_pos.device)
-        ZERO_VEL = torch.zeros_like(ball_vel)
+    def get_masked_lrpitch_by_position_observation(self, agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels):
+        """masking ball and opposing team information based on the player position on the pitch, either in left or right half of the pitch."""
+        OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0])
+        ZERO_VEL = torch.tensor([0.0, 0.0])
 
         # mask lhs or right third using agent position
-        if self.mask_pitch_lhs: mask_agent = (agent_pos[..., X] <= -1.0)
+        left_third = (-self.pitch_length / 2) + (self.pitch_length / 3)
+        if self.mask_pitch_lhs: mask_agent = (agent_pos[..., X] <= left_third)
         elif self.mask_pitch_rhs: mask_agent = (agent_pos[..., X] >= 0.0)
         mask_to_apply = mask_agent.unsqueeze(-1)
+        
+        # apply mask to ball position and velocity using arbitary tensors
+        ball_pos = torch.where(mask_to_apply, OUT_OF_BOUNDS_POS, ball_pos)
+        ball_vel = torch.where(mask_to_apply, ZERO_VEL, ball_vel)
+
+        # apply mask to red agents (the adversary team)
+        new_adversary_poses, new_adversary_vels = [], []
+        for adv_pos, adv_vel in zip(adversary_poses, adversary_vels):
+            adv_pos = torch.where(mask_to_apply, OUT_OF_BOUNDS_POS, adv_pos)
+            adv_vel = torch.where(mask_to_apply, ZERO_VEL, adv_vel)
+
+            new_adversary_poses.append(adv_pos)
+            new_adversary_vels.append(adv_vel)
+
+        return ball_pos, ball_vel, new_adversary_poses, new_adversary_vels
+
+
+    def get_masked_tbpitch_by_position_observation(self, agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels):
+        """mask the ball and opposing team information based on player position on the pitch, either in top or bottom half of the pitch."""
+        OUT_OF_BOUNDS_POS = torch.tensor([100.0, 100.0])
+        ZERO_VEL = torch.tensor([0.0, 0.0])
+
+        # mask top or bottom half using agent position
+        if self.mask_pitch_bhs: mask_agent = (agent_pos[..., Y] <= 0.0) # shape [num_envs (bool)]
+        elif self.mask_pitch_ths: mask_agent = (agent_pos[..., Y] >= 0.0) # shape [num_envs (bool)]
+        mask_to_apply = mask_agent.unsqueeze(-1) # shape [num_envs, 1 (bool)]
         
         # apply mask to ball position and velocity using arbitary tensors
         ball_pos = torch.where(mask_to_apply, OUT_OF_BOUNDS_POS, ball_pos)
@@ -1380,10 +1410,12 @@ class FootballDesign(BaseScenario):
 
         # If agent is blue i.e. our main players, change observation space if any information asymmetry
         else:
+            # mask different aspects of information depending on what flags are set
             if self.mask_pitch_lhs or self.mask_pitch_rhs:
-                # either mask depending on position of the agent or mask no matter what
-                # ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_observation(ball_pos, ball_vel, adversary_poses, adversary_vels)
-                ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_pitch_player_observation(agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels)
+                # currently masks based on player position, but can also completely mask a side of the pitch no matter what
+                ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_lrpitch_by_position_observation(agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels)
+            if self.mask_pitch_ths or self.mask_pitch_bhs:
+                ball_pos, ball_vel, adversary_poses, adversary_vels = self.get_masked_tbpitch_by_position_observation(agent_pos, ball_pos, ball_vel, adversary_poses, adversary_vels)
             if self.mask_ball:
                 ball_pos, ball_vel, ball_force = self.get_masked_ball_observation(ball_pos, ball_vel, ball_force)
             if self.mask_opponent:

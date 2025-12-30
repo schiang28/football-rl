@@ -8,8 +8,10 @@ This project also explores the role of how information asymmetry and policy comp
 
 | Flag | Category | Logic Description |
 | :--- | :--- | :--- |
-| **`mask_pitch_lhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is $< 0.0$ (Left Half) or $< -1.0$ (Left Third). |
-| **`mask_pitch_rhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is $> 0.0$ (Right Half). |
+| **`mask_pitch_lhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is $< 0.0$ (Left Half) or $< -1.0$ (Left Third) of the pitch. |
+| **`mask_pitch_rhs`** | **Spatial** | Agent is "blind" to external objects when its own $X$-coordinate is $> 0.0$ (Right Half) of the pitch. |
+| **`mask_pitch_bhs`** | **Spatial** | Agent is "blind" to external objects when its own $Y$-coordinate is $< 0.0$ (Bottom Half) of the pitch. |
+| **`mask_pitch_ths`** | **Spatial** | Agent is "blind" to external objects when its own $Y$-coordinate is $> 0.0$ (Right Half) of the pitch. |
 | **`mask_ball`** | **Sensory** | Masks ball information e.g. position and velocity from agent during training. |
 | **`mask_opponent`** | **Sensory** | Masks opponent information e.g. position and velocity from agent during training. |
 | **`mask_ball_by_distance`** | **Proximity** | Ball information is masked dependant on `DISTANCE_THRESHOLD` and the distance between the agent and the ball. |
@@ -21,8 +23,10 @@ This project also explores the role of how information asymmetry and policy comp
 
 ```python
 asymmetries = {
-    "mask_pitch_lhs": False,            # Spatial awareness of lhs of pitch
-    "mask_pitch_rhs": False,            # Spatial awareness of rhs of pitch
+    "mask_pitch_lhs": False,            # Spatial awareness of left hand side of pitch
+    "mask_pitch_rhs": False,            # Spatial awareness of right hand side of pitch
+    "mask_pitch_bhs": False,            # Spatial awareness of bottom side of pitch
+    "mask_pitch_ths": False,            # Spatial awareness of top side of pitch
     "mask_ball": False,                 # Ball information is available
     "mask_opponent": False,             # opponent information is available
     "mask_ball_by_distance": True,      # ball information will be masked depending on the agent's distance to ball
