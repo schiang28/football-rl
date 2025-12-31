@@ -59,7 +59,7 @@ def run_inference(config, checkpoint_path, grid_points):
     """Loads policy and critic and generates the value and action plots."""
     print(f"Starting plotting. Loading policy from: {checkpoint_path}")
 
-    device, vmas_device = setup_environment()
+    device, vmas_device = setup_environment(seed=0)
     env, agent_key = make_env(config, vmas_device)
     policy, critic = build_mappo_modules(env, config, device, agent_key)
 
@@ -90,7 +90,7 @@ def run_inference(config, checkpoint_path, grid_points):
         teammate_poses=[], teammate_forces=[], teammate_vels=[],
         ball_pos=ball_positions, ball_vel=fixed_base_vector, ball_force=fixed_base_vector,
         goal_pos=goal_pos_fixed, 
-        blue=True,
+        blue=True, agent_index=0 # only one agent for plotting so just manually define
     ).unsqueeze(1)
 
     eval_td = TensorDict({
@@ -171,6 +171,44 @@ def plot_value_heatmap(pitch_geometry, grid_points, eval_td, agent_key, critic, 
         plt.savefig(save_path, dpi=300)
     plt.show()
 
+    return V_s_grid
+
+
+def plot_value_profile(heatmap_data, pitch_geometry, title, save_path, save):
+    """Integrates value function from the heatap data along the y-axis for quantification."""
+    xmin, xmax = pitch_geometry['X_range']
+    ymin, ymax = pitch_geometry['Y_range']
+    dy = (ymax - ymin) / heatmap_data.shape[0]
+    integrated_profile = np.sum(heatmap_data, axis=0) * dy
+    x_bins = np.linspace(xmin, xmax, len(integrated_profile))
+    
+    # x_indices = np.arange(len(value_profile))
+    # slope, intercept = np.polyfit(x_indices, value_profile, 1)
+    # print(f"Goal Gravity (Linear Slope): {slope:.6f}")
+    # plt.plot(x_bins, slope * x_indices + intercept, '--', color='red', alpha=0.6, label=f'Goal Gravity (Slope: {slope:.4f})')
+    
+    plt.figure(figsize=(10, 5))
+    plt.axvline(x=0, color='lightgrey', linestyle='-')
+    plt.plot(x_bins, integrated_profile, color='green', label='Integral ($\int V dy$)')
+    plt.fill_between(x_bins, integrated_profile, color='green', alpha=0.2)
+
+    max_val = np.max(integrated_profile)
+    min_val = np.min(integrated_profile)
+    plt.axhline(y=max_val, color='forestgreen', linestyle='--', alpha=0.7, label=f'Max Value ({max_val:.3f})')
+    plt.axhline(y=min_val, color='darkred', linestyle='--', alpha=0.7, label=f'Min Value ({min_val:.3f})')
+    
+    plt.title(f"Value Function Profile: {title}")
+    plt.xlabel("Pitch X-Coordinate")
+    plt.ylabel("Value")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    if save:
+        save_path = f"{save_path}_val_profile.pdf"
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+    plt.show()
+
 
 def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, agent_key, sav_path, save, subsample=5):
     """Plots the policy mean action on the pitch like a vector field."""
@@ -223,15 +261,17 @@ if __name__ == "__main__":
     PLOT_VALUE_HEATMAP = True
     PLOT_ACTION_VECTORS = False
 
-    checkpoint_id, policy_no = "151225_153848", "499"
+    checkpoint_id, policy_no = "311225_011123", "1450"
     checkpoint_path = f"./saved_policies/mappo_football_{checkpoint_id}/iteration_{policy_no}_policy.pt"
     save_path = f"plots/{checkpoint_id}_{policy_no}"
-    title = "1v1 play masking opponent information"
+    title = "1v1 play masking bhs"
 
     eval_td, agent_key, pitch_geometry, policy, critic = run_inference(
         config=config,
         checkpoint_path=checkpoint_path,
         grid_points=GRID_POINTS)
 
-    if PLOT_VALUE_HEATMAP: plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, title, save_path, save=True)
+    if PLOT_VALUE_HEATMAP:
+        heatmap_grid = plot_value_heatmap(pitch_geometry, GRID_POINTS, eval_td, agent_key, critic, title, save_path, save=True)
+        plot_value_profile(heatmap_grid, pitch_geometry, title, save_path, save=True)
     if PLOT_ACTION_VECTORS: plot_action_vectors(pitch_geometry, GRID_POINTS, eval_td, policy, critic, agent_key, save_path, save=False)
