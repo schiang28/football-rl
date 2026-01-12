@@ -39,7 +39,7 @@ class MAPPOConfig:
     b_agents = 2
     r_agents = 1
     n_agents = b_agents + r_agents
-    observe_teammates = b_agents > 1
+    observe_teammates = False # b_agents > 1
 
     # Model
     mappo = True
@@ -380,37 +380,56 @@ def get_opponent_strength(config, log_iteration, asymmetries, num_increments):
 
 
 def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path):
+    """Load checkpoints into policy and critic, depending on if 1v1 or 2v1. Load individual policies into each first dimension of a multi-agent policy."""
+    assert 1 <= config.b_agents <= 2, "number of agents for training not implemented. only 1 or 2 agents allowed."
+
     if config.b_agents == 1:
+        # policy weight shape: [256, 24]
         checkpoint = torch.load(load_checkpoint_path[0], map_location=device)
         policy.load_state_dict(checkpoint['policy_state_dict'])
         critic.load_state_dict(checkpoint['critic_state_dict'])
         optim.load_state_dict(checkpoint['optimizer_state_dict'])
         log_iteration = checkpoint['iteration'] + 1
 
-    else: # if more than once policy is needed, e.g. in 2v1
-        checkpoint_0, checkpoint_1 = load_checkpoint_path
-        checkpoints = [torch.load(checkpoint_0, map_location=device), torch.load(checkpoint_1, map_location=device)]
-
+    else: # if 2v1 scenario and 2 policies need to be loaded, loading each policy into a different branch of the network
+        iterations = []
         new_policy_dict = policy.state_dict()
         new_critic_dict = critic.state_dict()
+        # new policy and critic weight shape: [2, 256, 24] and [2, 256, 48]
 
         for i in range(config.b_agents):
-            print(checkpoints[i]['policy_state_dict'].items())
-            for key, value in checkpoints[i]['policy_state_dict'].items():
-                new_key = key.replace("agent_network", f"agent_networks.{i}")
-                if new_key in new_policy_dict: new_policy_dict[new_key] = value
+            checkpoint = torch.load(load_checkpoint_path[i], map_location=device)
+            state_dict = checkpoint['policy_state_dict']
+            critic_dict = checkpoint['critic_state_dict']
+            # checkpoint policy and critic weights [256, 24]
+
+            # copying policies into the correct dimensions of the network, critic is shared
+            for key, value in state_dict.items():
+                if key in new_policy_dict and isinstance(value, torch.Tensor):
+                    new_policy_dict[key][i].copy_(value)
             
-            for key, value in checkpoints[i]['critic_state_dict'].items():
-                new_key = key.replace("agent_network", f"agent_networks.{i}")
-                if new_key in new_critic_dict: new_critic_dict[new_key] = value
+            if i == 0:
+                for key, value in critic_dict.items():
+                    if key in new_critic_dict and isinstance(value, torch.Tensor):
+                        # the last dimension between new and loaded critic does not match so have to padd with 0s
+                        if value.ndim == 2 and value.shape[-1] != new_critic_dict[key].shape[-1]:
+                            last_dim = value.shape[-1]
+                            new_critic_dict[key][0][:, :last_dim].copy_(value)
+                            new_critic_dict[key][1][:, :last_dim].copy_(value)
+                        else:
+                            # for biases or hidden layers where dimensions match, might still have the [2, ...] agent dimension
+                            if new_critic_dict[key].ndim > value.ndim:
+                                new_critic_dict[key][0].copy_(value)
+                                new_critic_dict[key][1].copy_(value)
+                            else: new_critic_dict[key].copy_(value)
+            iterations.append(checkpoint['iteration'])
 
         policy.load_state_dict(new_policy_dict)
         critic.load_state_dict(new_critic_dict)
-        log_iteration = checkpoints[0]['iteration'] + 1
+        log_iteration = max(iterations) + 1
 
     total_frames_collected = log_iteration * config.frames_per_batch
     print(f"Loaded {config.b_agents} distinct policies into the team.")
-
     return log_iteration, total_frames_collected
 
 
@@ -541,16 +560,17 @@ def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local):
 
 if __name__ == "__main__":
     config = MAPPOConfig()
-    LOAD_POLICY = False
+    LOAD_POLICY = True
     SAVE_POLICY = False
     USE_WANDB = True
     LOCAL = True
     AI_INCREMENTS = 1
 
     asymmetries = {
+        # list if more than one blue agent (2v1) e.g. [False, True]
         "mask_pitch_lhs": False,
-        "mask_pitch_rhs": False,
-        "mask_pitch_bhs": True,
+        "mask_pitch_rhs": [False, True],
+        "mask_pitch_bhs": False,
         "mask_pitch_ths": False,
         "mask_ball": False,
         "mask_opponent": False,
@@ -574,7 +594,7 @@ if __name__ == "__main__":
     if LOAD_POLICY:
         load_checkpoint_path = ["./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt"] # first policy
         if config.b_agents > 1:
-            load_checkpoint_path.append("./saved_policies/mappo_football_091225_174907/iteration_1950_policy.pt") # second policy if needed
+            load_checkpoint_path.append("./saved_policies/mappo_football_031225_133315/iteration_2950_policy.pt") # second policy if needed
     else: load_checkpoint_path = None
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")

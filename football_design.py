@@ -1163,7 +1163,7 @@ class FootballDesign(BaseScenario):
         if not blue:
             my_team, other_team = (self.red_agents, self.blue_agents)
             goal_pos = self.left_goal_pos
-            agent_index = self.red_agents.index(agent)
+            agent_index = self.red_agents.index(agent) # shouldn't be needed since agent index used for blue agents when more than 1
         else:
             my_team, other_team = (self.blue_agents, self.red_agents)
             goal_pos = self.right_goal_pos

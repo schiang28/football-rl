@@ -261,10 +261,10 @@ if __name__ == "__main__":
     PLOT_VALUE_HEATMAP = True
     PLOT_ACTION_VECTORS = False
 
-    checkpoint_id, policy_no = "311225_011123", "1450"
+    checkpoint_id, policy_no = "011225_195207", "499"
     checkpoint_path = f"./saved_policies/mappo_football_{checkpoint_id}/iteration_{policy_no}_policy.pt"
     save_path = f"plots/{checkpoint_id}_{policy_no}"
-    title = "1v1 play masking bhs"
+    title = "1v1 play baseline full observation"
 
     eval_td, agent_key, pitch_geometry, policy, critic = run_inference(
         config=config,
