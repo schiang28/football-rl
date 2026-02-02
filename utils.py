@@ -2,6 +2,20 @@ import warnings
 from typing import Sequence
 import torch
 
+SAVED_POLICIES = {
+    "baseline": "./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt",
+    "mask_rhs": "./saved_policies/mappo_football_031225_133315/iteration_2950_policy.pt",
+    "mask_lhs": "./saved_policies/mappo_football_091225_174907/iteration_1950_policy.pt",
+    "mask_ths": "./saved_policies/mappo_football_311225_070808/iteration_950_policy.pt",
+    "mask_bhs": "./saved_policies/mappo_football_311225_011123/iteration_1450_policy.pt",
+
+    "mask_opp": "./saved_policies/mappo_football_301225_072508/iteration_950_policy.pt",
+    "mask_bll": "./saved_policies/mappo_football_101225_181355/iteration_1450_policy.pt",
+    "mask_opp_if_far": "./saved_policies/mappo_football_311225_072859/iteration_1950_policy.pt",
+    "mask_ball_if_far": "./saved_policies/mappo_football_311225_011842/iteration_1450_policy.pt",
+    "mask_opp_if_close": "./saved_policies/mappo_football_311225_071737/iteration_950_policy.pt",
+    "mask_ball_if_close": "./saved_policies/mappo_football_311225_012232/iteration_1450_policy.pt"
+}
 
 class ClipModule(torch.nn.Module):
     def __init__(self, min_val, max_val):

@@ -25,7 +25,7 @@ from torchrl.record.loggers.wandb import WandbLogger
 import wandb
 
 from football_design import FootballDesign
-from utils import standardize, check_loss_values, ClipModule
+from utils import standardize, check_loss_values, ClipModule, SAVED_POLICIES
 from logging_tools import DummyLogger
 from custom_layers import GNNCommunicationLayer
 
@@ -614,9 +614,9 @@ if __name__ == "__main__":
         config.minibatch_size = 128
 
     if LOAD_POLICY:
-        load_checkpoint_path = ["./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt"] # first policy
+        load_checkpoint_path = [SAVED_POLICIES["baseline"]] # first policy
         if config.b_agents > 1:
-            load_checkpoint_path.append("./saved_policies/mappo_football_031225_133315/iteration_2950_policy.pt") # second policy if needed
+            load_checkpoint_path.append(SAVED_POLICIES["mask_rhs"]) # second policy if needed
     else: load_checkpoint_path = None
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
