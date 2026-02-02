@@ -27,6 +27,7 @@ import wandb
 from football_design import FootballDesign
 from utils import standardize, check_loss_values, ClipModule
 from logging_tools import DummyLogger
+from custom_layers import GNNCommunicationLayer
 
 os.environ["PYGLET_HEADLESS"] = "true"
 
@@ -122,26 +123,45 @@ def make_env(config, vmas_device, asymmetries, show_specs, show_keys):
     return env, agent_key
 
 
-def build_mappo_modules(env, config, device, agent_key):
+def build_mappo_modules(env, config, device, agent_key, use_gnn):
     """Creates and returns policy and critic modules based on config."""
     n_actions_per_agent = env.full_action_spec[env.action_key].shape[-1]
     n_obs_per_agent = env.observation_spec[agent_key, "observation"].shape[-1]
 
-    policy_net = torch.nn.Sequential(
-        MultiAgentMLP(
-            n_agent_inputs=n_obs_per_agent,
-            n_agent_outputs=2 * n_actions_per_agent,
-            n_agents=env.n_agents,
-            centralised=False,
-            share_params=config.share_parameters_policy,
-            device=device,
-            depth=config.depth,
-            num_cells=config.num_cells,
-            activation_class=torch.nn.Tanh,
-        ),
-        ClipModule(-5, 5),
-        NormalParamExtractor("biased_softplus_1.0"),
-    )
+    # setup policy network depending on whether to use a GNN to allow for communication when there is more than one agent
+    if config.b_agents > 1 and use_gnn:
+        policy_net = torch.nn.Sequential(
+            GNNCommunicationLayer(n_obs_per_agent, config.num_cells, env.n_agents).to(device),
+            MultiAgentMLP(
+                n_agent_inputs=config.num_cells,
+                n_agent_outputs=2 * n_actions_per_agent,
+                n_agents=env.n_agents,
+                centralised=False,
+                share_params=config.share_parameters_policy,
+                device=device,
+                depth=config.depth - 1, # adjust since GNN is already one layer
+                num_cells=config.num_cells,
+                activation_class=torch.nn.Tanh,
+            ),
+            ClipModule(-5, 5),
+            NormalParamExtractor("biased_softplus_1.0"),
+        )
+    else:
+        policy_net = torch.nn.Sequential(
+            MultiAgentMLP(
+                n_agent_inputs=n_obs_per_agent,
+                n_agent_outputs=2 * n_actions_per_agent,
+                n_agents=env.n_agents,
+                centralised=False,
+                share_params=config.share_parameters_policy,
+                device=device,
+                depth=config.depth,
+                num_cells=config.num_cells,
+                activation_class=torch.nn.Tanh,
+            ),
+            ClipModule(-5, 5),
+            NormalParamExtractor("biased_softplus_1.0"),
+        )
 
     policy_module = TensorDictModule(
         policy_net, in_keys=[(agent_key, "observation")], out_keys=[(agent_key, "loc"), (agent_key, "scale")],
@@ -229,7 +249,8 @@ def create_loss(config, env, policy, critic, agent_key):
 
 def setup_loggers(config, use_wandb, timestamp, local, asymmetries):
     """Setup tqdm logger and WanDB logger if used."""
-    active, tags = [k for k, v in asymmetries.items() if v], []
+    active = [k for k, v in asymmetries.items() if (isinstance(v, bool) and v) or (isinstance(v, list) and any(v))] # ensure params like ai_stength doesn't get used
+    tags = []
 
     if not active: group = "baseline"
     else:
@@ -565,6 +586,7 @@ if __name__ == "__main__":
     USE_WANDB = True
     LOCAL = True
     AI_INCREMENTS = 1
+    GNN_COMMUNICATION = True
 
     asymmetries = {
         # list if more than one blue agent (2v1) e.g. [False, True]
@@ -600,7 +622,7 @@ if __name__ == "__main__":
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     vmas_device, device = setup_environment(seed=0)
     env, agent_key = make_env(config, device, asymmetries, show_specs=False, show_keys=True)
-    policy, critic = build_mappo_modules(env, config, device, agent_key)
+    policy, critic = build_mappo_modules(env, config, device, agent_key, use_gnn=GNN_COMMUNICATION)
     
     trained_policy = train_mappo(
         timestamp=timestamp,
