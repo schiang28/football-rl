@@ -400,11 +400,11 @@ def get_opponent_strength(config, log_iteration, asymmetries, num_increments):
     return strength
 
 
-def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path):
+def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path, load_2v1_policy):
     """Load checkpoints into policy and critic, depending on if 1v1 or 2v1. Load individual policies into each first dimension of a multi-agent policy."""
     assert 1 <= config.b_agents <= 2, "number of agents for training not implemented. only 1 or 2 agents allowed."
 
-    if config.b_agents == 1:
+    if config.b_agents == 1 or load_2v1_policy:
         # policy weight shape: [256, 24]
         checkpoint = torch.load(load_checkpoint_path[0], map_location=device)
         policy.load_state_dict(checkpoint['policy_state_dict'])
@@ -454,7 +454,7 @@ def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path)
     return log_iteration, total_frames_collected
 
 
-def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path):
+def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path, load_2v1_policy):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -470,7 +470,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
     total_frames_collected = 0
 
     # If pre-trained policy provided, load that first
-    if load_checkpoint_path: log_iteration, total_frames_collected = get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path)
+    if load_checkpoint_path: log_iteration, total_frames_collected = get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path, load_2v1_policy)
 
     for tensordict_data in collector:
         iteration_start_time = time.time()
@@ -582,6 +582,7 @@ def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local):
 if __name__ == "__main__":
     config = MAPPOConfig()
     LOAD_POLICY = True
+    LOAD_2V1_POLICY = True
     SAVE_POLICY = False
     USE_WANDB = True
     LOCAL = True
@@ -602,8 +603,8 @@ if __name__ == "__main__":
 
         # opponent settings
         "ai_strength": 1.0,
-        "ai_decision_strength": 0.5,
-        "ai_precision_strength": 0.5,
+        "ai_decision_strength": 1.0,
+        "ai_precision_strength": 1.0,
     }
 
     if LOCAL:
@@ -614,7 +615,7 @@ if __name__ == "__main__":
         config.minibatch_size = 128
 
     if LOAD_POLICY:
-        load_checkpoint_path = [SAVED_POLICIES["baseline"]] # first policy
+        load_checkpoint_path = [SAVED_POLICIES["baseline"]] # first policy e.g. SAVED_POLICIES["baseline"]
         if config.b_agents > 1:
             load_checkpoint_path.append(SAVED_POLICIES["mask_rhs"]) # second policy if needed
     else: load_checkpoint_path = None
@@ -638,5 +639,6 @@ if __name__ == "__main__":
         save_policies=SAVE_POLICY,
         local=LOCAL,
         ai_increments=AI_INCREMENTS,
-        load_checkpoint_path=load_checkpoint_path
+        load_checkpoint_path=load_checkpoint_path,
+        load_2v1_policy=LOAD_2V1_POLICY
     )
