@@ -40,7 +40,7 @@ class MAPPOConfig:
     b_agents = 2
     r_agents = 1
     n_agents = b_agents + r_agents
-    observe_teammates = False # b_agents > 1
+    observe_teammates = False
 
     # Model
     mappo = True
@@ -608,6 +608,7 @@ if __name__ == "__main__":
     }
 
     if LOCAL:
+        # if running locally for testing
         config.n_iters = 100
         config.max_steps = 100
         config.frames_per_batch = 48000
@@ -617,7 +618,7 @@ if __name__ == "__main__":
     if LOAD_POLICY:
         load_checkpoint_path = [SAVED_POLICIES["baseline"]] # first policy e.g. SAVED_POLICIES["baseline"]
         if config.b_agents > 1:
-            load_checkpoint_path.append(SAVED_POLICIES["mask_rhs"]) # second policy if needed
+            load_checkpoint_path.append(SAVED_POLICIES["mask_rhs"]) # second policy if needed for multi-agent training
     else: load_checkpoint_path = None
 
     timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")

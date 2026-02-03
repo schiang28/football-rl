@@ -5,13 +5,17 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
 
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from torchrl.envs import TransformedEnv
 from torchrl.envs.libs.vmas import VmasEnv
 from tensordict.tensordict import TensorDict
 
 from football_design import FootballDesign
-from mappo_vmas_training import build_mappo_modules, setup_environment 
+from simulate_policy import build_mappo_modules, setup_environment 
 
 
 
@@ -23,7 +27,7 @@ class MAPPOConfig:
     b_agents = 1
     r_agents = 1
     n_agents = b_agents + r_agents
-    observe_teammates = b_agents > 1
+    observe_teammates = False
 
     # Model
     mappo = True
@@ -210,7 +214,7 @@ def plot_value_profile(heatmap_data, pitch_geometry, title, save_path, save):
     plt.show()
 
 
-def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, agent_key, sav_path, save, subsample=5):
+def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, agent_key, save_path, save, subsample=5):
     """Plots the policy mean action on the pitch like a vector field."""
     with torch.no_grad():
         value_td = critic(eval_td)
@@ -254,6 +258,50 @@ def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, ag
     plt.show()
 
 
+def plot_tsne_clusters(features_a, features_b, save, label_a="baseline", label_b="specialised"):
+    """Given two latent representations of features, plt TSNE clusters to show difference in policies."""
+    sns.set_context("paper", font_scale=1.5)
+    sns.set_style("whitegrid")
+
+    # feature_a shape: [N_samples, latent_dim]
+    all_features = np.concatenate([features_a, features_b], axis=0)
+
+    # cluster and reduce features to 2 dimensions
+    tsne = TSNE(n_components=2, perplexity=30)
+    reduced = tsne.fit_transform(all_features)
+
+    plt.figure(figsize=(8,8))
+
+    plt.scatter(reduced[:len(features_a), 0], reduced[:len(features_a), 1],
+                label=label_a,
+                alpha=0.6,
+                s=40,
+                edgecolor='w',
+                linewidth=0.5,
+                color=sns.color_palette("muted")[0])
+    plt.scatter(reduced[len(features_a):, 0], reduced[len(features_a):, 1],
+                label=label_b,
+                alpha=0.6,
+                s=40,
+                edgecolor='w',
+                linewidth=0.5,
+                color=sns.color_palette("muted")[1])
+
+    plt.title(f"t-SNE Projection: policies {label_a} vs {label_b}", pad=20)
+    plt.xlabel("Dimension 1")
+    plt.ylabel("Dimension 2")
+    plt.legend()
+    
+    sns.despine()
+    plt.tight_layout()
+
+    if save:
+        save_path = f"plots/tsne_{label_a}_vs_{label_b}.pdf"
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+
+    plt.show()
+
 
 if __name__ == "__main__":
     config = MAPPOConfig()
@@ -261,6 +309,7 @@ if __name__ == "__main__":
     PLOT_VALUE_HEATMAP = True
     PLOT_ACTION_VECTORS = False
 
+    # script for plotting value heatmaps or action vectors
     checkpoint_id, policy_no = "011225_195207", "499"
     checkpoint_path = f"./saved_policies/mappo_football_{checkpoint_id}/iteration_{policy_no}_policy.pt"
     save_path = f"plots/{checkpoint_id}_{policy_no}"

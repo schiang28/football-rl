@@ -24,7 +24,7 @@ class MAPPOConfig:
     b_agents = 1
     r_agents = 1
     n_agents = b_agents + r_agents
-    observe_teammates = b_agents > 1
+    observe_teammates = False
 
     # Model
     mappo = True
@@ -42,9 +42,9 @@ def rendering_callback(env, td):
     env.frames.append(env.render(mode="rgb_array", visualize_when_rgb=False))
 
 
-def setup_environment():
+def setup_environment(seed):
     """Determines device, sets seed and configures torch/tensordict settings."""
-    torch.manual_seed(0)
+    torch.manual_seed(seed)
     is_fork = multiprocessing.get_start_method() == "fork"
     device = torch.device(0 if torch.cuda.is_available() and not is_fork else "cpu")
     vmas_device = device
