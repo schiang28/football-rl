@@ -259,11 +259,10 @@ def plot_action_vectors(pitch_geometry, grid_points, eval_td, policy, critic, ag
 
 
 def plot_tsne_clusters(features_a, features_b, save, label_a="baseline", label_b="specialised"):
-    """Given two latent representations of features, plt TSNE clusters to show difference in policies."""
+    """Given two latent representations of features, plot TSNE clusters to show difference in policies."""
     sns.set_context("paper", font_scale=1.5)
     sns.set_style("whitegrid")
 
-    # feature_a shape: [N_samples, latent_dim]
     all_features = np.concatenate([features_a, features_b], axis=0)
 
     # cluster and reduce features to 2 dimensions
@@ -271,7 +270,8 @@ def plot_tsne_clusters(features_a, features_b, save, label_a="baseline", label_b
     reduced = tsne.fit_transform(all_features)
 
     plt.figure(figsize=(8,8))
-
+    
+    # plot policy A
     plt.scatter(reduced[:len(features_a), 0], reduced[:len(features_a), 1],
                 label=label_a,
                 alpha=0.6,
@@ -279,6 +279,8 @@ def plot_tsne_clusters(features_a, features_b, save, label_a="baseline", label_b
                 edgecolor='w',
                 linewidth=0.5,
                 color=sns.color_palette("muted")[0])
+
+    # plot policy B
     plt.scatter(reduced[len(features_a):, 0], reduced[len(features_a):, 1],
                 label=label_b,
                 alpha=0.6,
@@ -291,7 +293,6 @@ def plot_tsne_clusters(features_a, features_b, save, label_a="baseline", label_b
     plt.xlabel("Dimension 1")
     plt.ylabel("Dimension 2")
     plt.legend()
-    
     sns.despine()
     plt.tight_layout()
 

@@ -33,6 +33,7 @@ def get_latent_features(policy, states, agent_key):
     inner_mlp = next(mlp.children())
     feature_extractor = torch.nn.Sequential(inner_mlp[0], inner_mlp[1])
 
+    # extract latent representation of policies
     with torch.no_grad():
         obs = states[(agent_key, "observation")]
         latents = feature_extractor(obs)
@@ -74,11 +75,15 @@ def calculate_snd(policy_a, policy_b, states, agent_key):
         loc_b = td_b[agent_key, "loc"][:, 0, :].clone()
         scale_b = td_b[agent_key, "scale"][:, 0, :].clone()
 
+        # normal distributions for policies a and b to calculate kl divergence
         dist_a = D.Normal(loc_a, scale_a)
         dist_b = D.Normal(loc_b, scale_b)
-        kl = D.kl_divergence(dist_a, dist_b).sum(dim=-1)
+        kl_ab = D.kl_divergence(dist_a, dist_b).sum(dim=-1)
+        kl_ba = D.kl_divergence(dist_b, dist_a).sum(dim=-1)
+        kl = ((kl_ab + kl_ba) / 2).mean().item()
 
-    return kl.mean().item()
+
+    return kl_ab.mean().item(), kl_ba.mean().item(), kl
 
 
 def eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, agent_key, save_plot):
@@ -88,14 +93,18 @@ def eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, a
     test_td = test_td.reshape(-1)
     print("GENERATED ROLLOUT SAMPLES.")
 
-    snd_val = calculate_snd(policy_a, policy_b, test_td, agent_key)
+    snd_ab, snd_ba, snd_val = calculate_snd(policy_a, policy_b, test_td, agent_key)
     latents_a = get_latent_features(policy_a, test_td, agent_key)
     latents_b = get_latent_features(policy_b, test_td, agent_key)
-    print(f"System Neural Diversity (SND) between A ({policy_a_name}) and B ({policy_b_name}): {snd_val}")
+
+    print(f"KL divergence AB: {snd_ab}")
+    print(f"KL divergence BA: {snd_ba}")
+    print(f"Symmetric System Neural Diversity (SND) between A ({policy_a_name}) and B ({policy_b_name}): {snd_val}")
 
     print("PLOTTING TSNE CLUSTERS.")
     plot_tsne_clusters(latents_a, latents_b, save_plot, policy_a_name, policy_b_name)
     return snd_val
+
 
 
 if __name__ == "__main__":
@@ -104,11 +113,11 @@ if __name__ == "__main__":
     EVAL_CONJECTURE_2 = False
     EVAL_CONJECTURE_3 = False
 
-    policy_a_name, policy_b_name = "baseline", "mask_rhs"
+    policy_a_name, policy_b_name = "mask_opp_if_far", "mask_opp_if_close"
     checkpoint_path_a, checkpoint_path_b = SAVED_POLICIES[policy_a_name], SAVED_POLICIES[policy_b_name]
     env, policy_a, policy_b, agent_key = setup_and_get_policies(config, checkpoint_path_a, checkpoint_path_b)
 
     # comparing system neural diversity (SND) and KL divergence between baseline and specialised policies
-    if EVAL_CONJECTURE_1: snd_val = eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, agent_key, save_plot=False)
+    if EVAL_CONJECTURE_1: snd_val = eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, agent_key, save_plot=True)
     elif EVAL_CONJECTURE_2: pass
     elif EVAL_CONJECTURE_3: pass
