@@ -8,6 +8,7 @@ from matplotlib.patches import Rectangle
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
 
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from torchrl.envs import TransformedEnv
@@ -302,6 +303,31 @@ def plot_tsne_clusters(features_a, features_b, save, label_a="baseline", label_b
         plt.savefig(save_path, dpi=300)
 
     plt.show()
+
+
+def plot_snd_heatmap(data_dict, label_a, label_b, save):
+    """Plot matrix using data dict and better than normal."""
+    policies = sorted(list(set([k for t in data_dict.keys() for k in t])))
+    matrix = pd.DataFrame(index=policies, columns=policies, dtype=float)
+    
+    for (a, b), val in data_dict.items():
+        matrix.loc[a, b] = val
+        matrix.loc[b, a] = val
+    matrix.fillna(0, inplace=True)
+
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(matrix, annot=True, fmt=".1f", cmap="YlGnBu", cbar_kws={'label': 'SND'})
+    
+    plt.title(f"SND heatmap of baseline and specialised policies")
+    plt.tight_layout()
+    
+    if save:
+        save_path = f"plots/heatmap_{label_a}_vs{label_b}.pdf"
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+
+    plt.show()
+
 
 
 if __name__ == "__main__":
