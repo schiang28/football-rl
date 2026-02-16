@@ -1,6 +1,8 @@
 import warnings
 from typing import Sequence
 import torch
+import argparse
+
 
 SAVED_POLICIES = {
     "baseline": "./saved_policies/mappo_football_011225_195207/iteration_499_policy.pt",
@@ -14,7 +16,10 @@ SAVED_POLICIES = {
     "mask_opp_if_far": "./saved_policies/mappo_football_311225_072859/iteration_1950_policy.pt",
     "mask_ball_if_far": "./saved_policies/mappo_football_311225_011842/iteration_1450_policy.pt",
     "mask_opp_if_close": "./saved_policies/mappo_football_311225_071737/iteration_950_policy.pt",
-    "mask_ball_if_close": "./saved_policies/mappo_football_311225_012232/iteration_1450_policy.pt"
+    "mask_ball_if_close": "./saved_policies/mappo_football_311225_012232/iteration_1450_policy.pt",
+
+    "baseline_v1": "./saved_policies/mappo_football_040226_200141/iteration_499_policy.pt",
+    "baseline_v2": "./saved_policies/mappo_football_040226_200347/iteration_499_policy.pt"
 }
 
 class ClipModule(torch.nn.Module):
@@ -25,6 +30,14 @@ class ClipModule(torch.nn.Module):
 
     def forward(self, x):
         return torch.clamp(x, min=self.min_val, max=self.max_val) 
+
+
+def parse_args():
+    """Argument parsing setup."""
+    parser = argparse.ArgumentParser(description="MAPPO Football Training")
+    parser.add_argument("--seed", type=int, default=0, help="Seed to use for RL football training")
+    parser.add_argument("--timestamp", type=str, default=None, help="Shared timestamp for WandB grouping")
+    return parser.parse_args()
 
 
 def check_loss_values(advantage, loss_vals, subdata, agent_key):

@@ -88,7 +88,7 @@ def calculate_snd(policy_a, policy_b, states, agent_key):
 
 def eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, agent_key, save_plot):
     """Evaluation and evidence for conjecture 1. Calculate SND scores and cluster latent representions by calling plotting tsne code."""
-    env.set_seed(0)
+    env.set_seed(1)
     test_td = env.rollout(max_steps=100)
     test_td = test_td.reshape(-1)
     print("GENERATED ROLLOUT SAMPLES.")
@@ -113,11 +113,11 @@ if __name__ == "__main__":
     EVAL_CONJECTURE_2 = False
     EVAL_CONJECTURE_3 = False
 
-    policy_a_name, policy_b_name = "mask_lhs", "mask_rhs"
+    policy_a_name, policy_b_name = "baseline_v1", "baseline_v2"
     checkpoint_path_a, checkpoint_path_b = SAVED_POLICIES[policy_a_name], SAVED_POLICIES[policy_b_name]
     env, policy_a, policy_b, agent_key = setup_and_get_policies(config, checkpoint_path_a, checkpoint_path_b)
 
     # comparing system neural diversity (SND) and KL divergence between baseline and specialised policies
-    if EVAL_CONJECTURE_1: snd_val = eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, agent_key, save_plot=False)
+    if EVAL_CONJECTURE_1: snd_val = eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, agent_key, save_plot=True)
     elif EVAL_CONJECTURE_2: pass
     elif EVAL_CONJECTURE_3: pass

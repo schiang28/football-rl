@@ -1,5 +1,7 @@
 import torch
 import os
+import sys
+
 from tqdm import tqdm
 import datetime
 import time
@@ -25,7 +27,7 @@ from torchrl.record.loggers.wandb import WandbLogger
 import wandb
 
 from football_design import FootballDesign
-from utils import standardize, check_loss_values, ClipModule, SAVED_POLICIES
+from utils import standardize, check_loss_values, ClipModule, SAVED_POLICIES, parse_args
 from logging_tools import DummyLogger
 from custom_layers import GNNCommunicationLayer
 
@@ -37,7 +39,7 @@ class MAPPOConfig:
     max_steps = 500 # max no. timesteps per episode (def. 500)
     scenario_name = "football"
     scenario = FootballDesign
-    b_agents = 2
+    b_agents = 1
     r_agents = 1
     n_agents = b_agents + r_agents
     observe_teammates = False
@@ -247,10 +249,18 @@ def create_loss(config, env, policy, critic, agent_key):
     return loss_module
 
 
-def setup_loggers(config, use_wandb, timestamp, local, asymmetries):
+def setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries):
     """Setup tqdm logger and WanDB logger if used."""
     active = [k for k, v in asymmetries.items() if (isinstance(v, bool) and v) or (isinstance(v, list) and any(v))] # ensure params like ai_stength doesn't get used
     tags = []
+
+    """
+    if use_wandb and local:
+        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="fb_mappo_tests", log_dir="./wandb_logs", tags=tags, group=group)
+    elif use_wandb and not local:
+        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs", tags=tags, group=group)
+    else: logger = DummyLogger()  
+    """
 
     if not active: group = "baseline"
     else:
@@ -260,11 +270,13 @@ def setup_loggers(config, use_wandb, timestamp, local, asymmetries):
             active.remove(extra)
         group = active[0]
 
-    if use_wandb and local:
-        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="fb_mappo_tests", log_dir="./wandb_logs", tags=tags, group=group)
-    elif use_wandb and not local:
-        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs", tags=tags, group=group)
-    else: logger = DummyLogger()  
+    group_name = f"{group}_{timestamp}"
+    exp_name = f"{timestamp}_{group}_s{seed}"
+
+    if use_wandb:
+        project = "fb_mappo_tests" if local else "torchrl_mappo_vmas"
+        logger = WandbLogger(exp_name=exp_name, project=project, log_dir="./wandb_logs", tags=tags, group=group_name)
+    else: logger = DummyLogger()
 
     pbar = tqdm(total=config.n_iters, desc="episode_reward_mean = 0")
 
@@ -454,7 +466,7 @@ def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path,
     return log_iteration, total_frames_collected
 
 
-def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path, load_2v1_policy):
+def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path, load_2v1_policy):
     """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
@@ -463,7 +475,7 @@ def train_mappo(timestamp, config, env, policy, critic, agent_key, device, vmas_
     replay_buffer = create_buffer(config)
     loss_module = create_loss(config, env, policy, critic, agent_key)
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
-    logger, pbar = setup_loggers(config, use_wandb, timestamp, local, asymmetries)
+    logger, pbar = setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries)
 
     log_iteration = 0
     total_time = 0
@@ -580,19 +592,20 @@ def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local):
 
 
 if __name__ == "__main__":
+    args = parse_args()
     config = MAPPOConfig()
-    LOAD_POLICY = True
-    LOAD_2V1_POLICY = True
+    LOAD_POLICY = False
+    LOAD_2V1_POLICY = False
     SAVE_POLICY = False
     USE_WANDB = True
     LOCAL = True
     AI_INCREMENTS = 1
-    GNN_COMMUNICATION = True
+    GNN_COMMUNICATION = False
 
     asymmetries = {
         # list if more than one blue agent (2v1) e.g. [False, True]
         "mask_pitch_lhs": False,
-        "mask_pitch_rhs": [False, True],
+        "mask_pitch_rhs": False,
         "mask_pitch_bhs": False,
         "mask_pitch_ths": False,
         "mask_ball": False,
@@ -621,13 +634,14 @@ if __name__ == "__main__":
             load_checkpoint_path.append(SAVED_POLICIES["mask_rhs"]) # second policy if needed for multi-agent training
     else: load_checkpoint_path = None
 
-    timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
-    vmas_device, device = setup_environment(seed=0)
+    timestamp = args.timestamp if args.timestamp else datetime.datetime.now().strftime("%d%m%y_%H%M%S")
+    vmas_device, device = setup_environment(seed=args.seed)
     env, agent_key = make_env(config, device, asymmetries, show_specs=False, show_keys=True)
     policy, critic = build_mappo_modules(env, config, device, agent_key, use_gnn=GNN_COMMUNICATION)
     
     trained_policy = train_mappo(
         timestamp=timestamp,
+        seed=args.seed,
         config=config,
         env=env,
         policy=policy,
