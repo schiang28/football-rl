@@ -39,7 +39,7 @@ class MAPPOConfig:
     max_steps = 500 # max no. timesteps per episode (def. 500)
     scenario_name = "football"
     scenario = FootballDesign
-    b_agents = 1
+    b_agents = 2
     r_agents = 1
     n_agents = b_agents + r_agents
     observe_teammates = False
@@ -77,6 +77,10 @@ class MAPPOConfig:
     # Checkpoints
     num_checkpoints = 10 # how many policies will be saved during training
     checkpoint_interval = n_iters // num_checkpoints
+
+    # Curriculum learning opponent
+    max_speed = 0.15
+    u_multiplier = 0.1
 
 
 
@@ -399,14 +403,16 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
 
 def get_opponent_strength(config, log_iteration, asymmetries, num_increments):
     """Use curriculum learning by setting AI opponent strength level by using a discrete number of increments to gradually step up AI strength ending at the defined maximum strength by end of training."""
-    start_strength = asymmetries["ai_decision_strength"]
+    target_strength = asymmetries.get("ai_strength", 1.0) # when we want to go beyond additional difficulty for physical attributes
+    if target_strength > 1.0: start_strength = 1.0
+    else: start_strength = asymmetries.get("ai_decision_strength", 0.0)
     
     if num_increments == 1:
         return start_strength
 
     step_size = config.n_iters // num_increments
     curr_step_idx = min(floor(log_iteration / step_size), num_increments - 1)
-    growth_per_step = (1.0 - start_strength) / (num_increments - 1)
+    growth_per_step = (target_strength - start_strength) / (num_increments - 1)
     strength = start_strength + (curr_step_idx * growth_per_step)
 
     return strength
@@ -462,6 +468,8 @@ def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path,
         log_iteration = max(iterations) + 1
 
     total_frames_collected = log_iteration * config.frames_per_batch
+    # to test returning log iteration and total frames colelcted as 0
+    log_iteration, total_frames_collected = 0, 0
     print(f"Loaded {len(load_checkpoint_path)} distinct policies into the team.")
     return log_iteration, total_frames_collected
 
@@ -566,14 +574,13 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
 
         # set AI opponent strength if we are using more than one increment
         if ai_increments > 1 or asymmetries.get('ai_strength', 1.0) > 1:
-            ai_strength = get_opponent_strength(config, log_iteration, asymmetries, ai_increments)
-            # extra physical boost for additional difficulty by defined amount
-            physical_scalar = asymmetries.get('ai_strength', 1.0)
+            cl_strength = get_opponent_strength(config, log_iteration, asymmetries, ai_increments)
 
-            collector.env.scenario.ai_decision_strength = ai_strength
-            collector.env.scenario.ai_precision_strength = ai_strength
-            collector.env.scenario.max_speed = config.max_speed * physical_scalar
-            collector.env.scenario.u_multiplier = config.u_multiplier * physical_scalar
+            collector.env.scenario.ai_decision_strength = min(1.0, cl_strength)
+            collector.env.scenario.ai_precision_strength = min(1.0, cl_strength)
+
+            collector.env.scenario.max_speed = config.max_speed * cl_strength
+            collector.env.scenario.u_multiplier = config.u_multiplier * cl_strength
 
     return policy
 
@@ -619,10 +626,8 @@ if __name__ == "__main__":
         "mask_opponent_by_distance": False,
         "mask_if_far": False,
 
-        # opponent settings
-        "ai_strength": 1.0,
-        "ai_decision_strength": 1.0,
-        "ai_precision_strength": 1.0,
+        # opponent settings physically, decision and precision attributes
+        "ai_strength": 1.5, "ai_decision_strength": 1.0, "ai_precision_strength": 1.0,
     }
 
     if LOCAL:
