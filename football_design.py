@@ -1051,11 +1051,15 @@ class FootballDesign(BaseScenario):
 
     def pre_step(self):
         if self.enable_shooting:
-            self._agents_rel_pos_to_ball = (
-                None  # Make sure the global elements in precess_actions are recomputed
-            )
+            self._agents_rel_pos_to_ball = (None) # Make sure the global elements in precess_actions are recomputed
             self.ball.action.u += self.ball.kicking_action
             self.ball.kicking_action[:] = 0
+
+        # added: update red agent's max speed and acceleration multiplier for curriculum learning
+        for agent in self.red_agents:
+            agent._max_speed = self.max_speed
+            agent._u_multiplier = [self.u_multiplier, self.u_multiplier]
+
 
     def reward(self, agent: Agent):
         # Called with agent=None when only AIs are playing to compute the _done

@@ -462,7 +462,7 @@ def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path,
         log_iteration = max(iterations) + 1
 
     total_frames_collected = log_iteration * config.frames_per_batch
-    print(f"Loaded {config.b_agents} distinct policies into the team.")
+    print(f"Loaded {len(load_checkpoint_path)} distinct policies into the team.")
     return log_iteration, total_frames_collected
 
 
@@ -565,10 +565,15 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
         log_iteration += 1
 
         # set AI opponent strength if we are using more than one increment
-        if ai_increments > 1:
+        if ai_increments > 1 or asymmetries.get('ai_strength', 1.0) > 1:
             ai_strength = get_opponent_strength(config, log_iteration, asymmetries, ai_increments)
+            # extra physical boost for additional difficulty by defined amount
+            physical_scalar = asymmetries.get('ai_strength', 1.0)
+
             collector.env.scenario.ai_decision_strength = ai_strength
             collector.env.scenario.ai_precision_strength = ai_strength
+            collector.env.scenario.max_speed = config.max_speed * physical_scalar
+            collector.env.scenario.u_multiplier = config.u_multiplier * physical_scalar
 
     return policy
 
@@ -594,18 +599,18 @@ def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local):
 if __name__ == "__main__":
     args = parse_args()
     config = MAPPOConfig()
-    LOAD_POLICY = False
+    LOAD_POLICY = True
     LOAD_2V1_POLICY = False
     SAVE_POLICY = False
     USE_WANDB = True
     LOCAL = True
-    AI_INCREMENTS = 1
-    GNN_COMMUNICATION = False
+    AI_INCREMENTS = 3
+    GNN_COMMUNICATION = True
 
     asymmetries = {
         # list if more than one blue agent (2v1) e.g. [False, True]
         "mask_pitch_lhs": False,
-        "mask_pitch_rhs": False,
+        "mask_pitch_rhs": [False, True],
         "mask_pitch_bhs": False,
         "mask_pitch_ths": False,
         "mask_ball": False,
