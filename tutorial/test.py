@@ -1,4 +1,4 @@
 import torch
 
-x = [1,2,3]
-print(x.index(5))
+x = sorted([4,1,2])
+print(x)

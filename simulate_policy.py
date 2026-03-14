@@ -14,6 +14,7 @@ from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.modules import MultiAgentMLP, ProbabilisticActor, TanhNormal
 from utils import ClipModule
 from football_design import FootballDesign
+from custom_layers import GNNCommunicationLayer
 
 
 class MAPPOConfig:
@@ -77,26 +78,44 @@ def make_env(config, vmas_device, custom_blue_pos=None, custom_red_pos=None, cus
     return env, agent_key
 
 
-def build_mappo_modules(env, config, device, agent_key):
+def build_mappo_modules(env, config, device, agent_key, use_gnn=False):
     """Creates policy module architecture to load weights into."""
     n_actions_per_agent = env.full_action_spec[env.action_key].shape[-1]
     n_obs_per_agent = env.observation_spec[agent_key, "observation"].shape[-1]
 
-    policy_net = torch.nn.Sequential(
-        MultiAgentMLP(
-            n_agent_inputs=n_obs_per_agent,
-            n_agent_outputs=2 * n_actions_per_agent,
-            n_agents=env.n_agents,
-            centralised=False,
-            share_params=config.share_parameters_policy,
-            device=device,
-            depth=config.depth,
-            num_cells=config.num_cells,
-            activation_class=torch.nn.Tanh,
-        ),
-        ClipModule(-5, 5),
-        NormalParamExtractor("biased_softplus_1.0"),
-    )
+    if config.b_agents > 1 and use_gnn:
+        policy_net = torch.nn.Sequential(
+            GNNCommunicationLayer(n_obs_per_agent, config.num_cells, env.n_agents).to(device),
+            MultiAgentMLP(
+                n_agent_inputs=config.num_cells,
+                n_agent_outputs=2 * n_actions_per_agent,
+                n_agents=env.n_agents,
+                centralised=False,
+                share_params=config.share_parameters_policy,
+                device=device,
+                depth=config.depth - 1,
+                num_cells=config.num_cells,
+                activation_class=torch.nn.Tanh,
+            ),
+            ClipModule(-5, 5),
+            NormalParamExtractor("biased_softplus_1.0"),
+        )
+    else:
+        policy_net = torch.nn.Sequential(
+            MultiAgentMLP(
+                n_agent_inputs=n_obs_per_agent,
+                n_agent_outputs=2 * n_actions_per_agent,
+                n_agents=env.n_agents,
+                centralised=False,
+                share_params=config.share_parameters_policy,
+                device=device,
+                depth=config.depth,
+                num_cells=config.num_cells,
+                activation_class=torch.nn.Tanh,
+            ),
+            ClipModule(-5, 5),
+            NormalParamExtractor("biased_softplus_1.0"),
+        )
 
     policy_module = TensorDictModule(
         policy_net, in_keys=[(agent_key, "observation")], out_keys=[(agent_key, "loc"), (agent_key, "scale")],

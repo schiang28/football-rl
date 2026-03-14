@@ -22,6 +22,12 @@ SAVED_POLICIES = {
     "baseline_v2": "./saved_policies/mappo_football_040226_200347/iteration_499_policy.pt"
 }
 
+
+SAVED_POLICIES_2V1 = {
+    "baseline": "./saved_policies/mappo_football_161225_213559/iteration_450_policy.pt",
+    "baseline_vs_mask_rhs": "./saved_policies/mappo_football_030226_090456/iteration_3600_policy.pt"
+}
+
 class ClipModule(torch.nn.Module):
     def __init__(self, min_val, max_val):
         super().__init__()

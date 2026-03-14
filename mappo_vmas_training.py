@@ -27,7 +27,7 @@ from torchrl.record.loggers.wandb import WandbLogger
 import wandb
 
 from football_design import FootballDesign
-from utils import standardize, check_loss_values, ClipModule, SAVED_POLICIES, parse_args
+from utils import standardize, check_loss_values, ClipModule, SAVED_POLICIES, SAVED_POLICIES_2V1, parse_args
 from logging_tools import DummyLogger
 from custom_layers import GNNCommunicationLayer
 
@@ -255,16 +255,8 @@ def create_loss(config, env, policy, critic, agent_key):
 
 def setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries):
     """Setup tqdm logger and WanDB logger if used."""
-    active = [k for k, v in asymmetries.items() if (isinstance(v, bool) and v) or (isinstance(v, list) and any(v))] # ensure params like ai_stength doesn't get used
+    active = sorted([k for k, v in asymmetries.items() if (isinstance(v, bool) and v) or (isinstance(v, list) and any(v))]) # ensure params like ai_stength doesn't get used
     tags = []
-
-    """
-    if use_wandb and local:
-        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="fb_mappo_tests", log_dir="./wandb_logs", tags=tags, group=group)
-    elif use_wandb and not local:
-        logger = WandbLogger(exp_name=f"{config.scenario_name}_{timestamp}", project="torchrl_mappo_vmas", log_dir="./wandb_logs", tags=tags, group=group)
-    else: logger = DummyLogger()  
-    """
 
     if not active: group = "baseline"
     else:
@@ -547,7 +539,7 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
 
         # save checkpointed policy every n episodes
         if (log_iteration > 0 and save_policies and ((log_iteration % config.checkpoint_interval == 0) or (log_iteration + 1 == config.n_iters))):
-            save_checkpoint(policy, log_iteration, critic, optim, timestamp, local)
+            save_checkpoint(policy, log_iteration, critic, optim, timestamp, local, seed)
 
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time
@@ -585,10 +577,10 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
     return policy
 
 
-def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local):
+def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local, seed):
     """Saves the state dictionary of trained policy."""
-    if local: checkpoint_path = f"./test_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
-    else: checkpoint_path = f"./saved_policies/mappo_{config.scenario_name}_{timestamp}/iteration_{checkpoint}_policy.pt"
+    if local: checkpoint_path = f"./test_policies/{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
+    else: checkpoint_path = f"./saved_policies/{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
     state = {
@@ -607,9 +599,9 @@ if __name__ == "__main__":
     args = parse_args()
     config = MAPPOConfig()
     LOAD_POLICY = True
-    LOAD_2V1_POLICY = False
+    LOAD_2V1_POLICY = True
     SAVE_POLICY = False
-    USE_WANDB = True
+    USE_WANDB = False
     LOCAL = True
     AI_INCREMENTS = 3
     GNN_COMMUNICATION = True
@@ -639,7 +631,7 @@ if __name__ == "__main__":
         config.minibatch_size = 128
 
     if LOAD_POLICY:
-        load_checkpoint_path = [SAVED_POLICIES["baseline"]] # first policy e.g. SAVED_POLICIES["baseline"]
+        load_checkpoint_path = [SAVED_POLICIES_2V1["baseline_vs_mask_rhs"]] # first policy e.g. SAVED_POLICIES["baseline"]
         if config.b_agents > 1:
             load_checkpoint_path.append(SAVED_POLICIES["mask_rhs"]) # second policy if needed for multi-agent training
     else: load_checkpoint_path = None
