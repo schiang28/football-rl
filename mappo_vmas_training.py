@@ -30,6 +30,7 @@ from football_design import FootballDesign
 from utils import standardize, check_loss_values, ClipModule, SAVED_POLICIES, SAVED_POLICIES_2V1, parse_args
 from logging_tools import DummyLogger
 from custom_layers import GNNCommunicationLayer
+from asymmetries import AsymmetryConfig, ObservationMasks, OpponentDifficulty
 
 os.environ["PYGLET_HEADLESS"] = "true"
 
@@ -39,7 +40,7 @@ class MAPPOConfig:
     max_steps = 500 # max no. timesteps per episode (def. 500)
     scenario_name = "football"
     scenario = FootballDesign
-    b_agents = 2
+    b_agents = 1
     r_agents = 1
     n_agents = b_agents + r_agents
     observe_teammates = False
@@ -207,7 +208,7 @@ def build_mappo_modules(env, config, device, agent_key, use_gnn):
     return policy, critic
 
 
-def create_buffer(config):
+def create_buffer(config, device):
     """Creates replay buffer."""
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(config.frames_per_batch, device=device),
@@ -255,23 +256,13 @@ def create_loss(config, env, policy, critic, agent_key):
 
 def setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries):
     """Setup tqdm logger and WanDB logger if used."""
-    active = sorted([k for k, v in asymmetries.items() if (isinstance(v, bool) and v) or (isinstance(v, list) and any(v))]) # ensure params like ai_stength doesn't get used
-    tags = []
-
-    if not active: group = "baseline"
-    else:
-        # custom tagging and grouping conditions
-        if (any(t in active for t in ["mask_ball_by_distance", "mask_opponent_by_distance"])) and (extra := "mask_if_far") in active:
-            tags.append(extra)
-            active.remove(extra)
-        group = active[0]
-
+    group = asymmetries.label()
     group_name = f"{group}_{timestamp}"
     exp_name = f"{timestamp}_{group}_s{seed}"
 
     if use_wandb:
         project = "fb_mappo_tests" if local else "torchrl_mappo_vmas"
-        logger = WandbLogger(exp_name=exp_name, project=project, log_dir="./wandb_logs", tags=tags, group=group_name)
+        logger = WandbLogger(exp_name=exp_name, project=project, log_dir="./wandb_logs", group=group_name)
     else: logger = DummyLogger()
 
     pbar = tqdm(total=config.n_iters, desc="episode_reward_mean = 0")
@@ -395,9 +386,9 @@ def evaluate_agents(config, policy, logger, log_iteration, agent_key, device, as
 
 def get_opponent_strength(config, log_iteration, asymmetries, num_increments):
     """Use curriculum learning by setting AI opponent strength level by using a discrete number of increments to gradually step up AI strength ending at the defined maximum strength by end of training."""
-    target_strength = asymmetries.get("ai_strength", 1.0) # when we want to go beyond additional difficulty for physical attributes
+    target_strength = asymmetries.opponent.ai_strength # when we want to go beyond additional difficulty for physical attributes
     if target_strength > 1.0: start_strength = 1.0
-    else: start_strength = asymmetries.get("ai_decision_strength", 0.0)
+    else: start_strength = asymmetries.opponent.ai_decision_strength
     
     if num_increments == 1:
         return start_strength
@@ -453,15 +444,14 @@ def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path,
                                 new_critic_dict[key][0].copy_(value)
                                 new_critic_dict[key][1].copy_(value)
                             else: new_critic_dict[key].copy_(value)
-            iterations.append(checkpoint['iteration'])
 
         policy.load_state_dict(new_policy_dict)
         critic.load_state_dict(new_critic_dict)
-        log_iteration = max(iterations) + 1
+        log_iteration = 0
 
     total_frames_collected = log_iteration * config.frames_per_batch
     # to test returning log iteration and total frames colelcted as 0
-    log_iteration, total_frames_collected = 0, 0
+    total_frames_collected = 0
     print(f"Loaded {len(load_checkpoint_path)} distinct policies into the team.")
     return log_iteration, total_frames_collected
 
@@ -472,12 +462,12 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
     num_inner_iters = config.frames_per_batch // config.minibatch_size
 
     collector = create_collector(config, env, policy, vmas_device, device, total_frames)
-    replay_buffer = create_buffer(config)
+    replay_buffer = create_buffer(config, device)
     loss_module = create_loss(config, env, policy, critic, agent_key)
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
     logger, pbar = setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries)
 
-    log_iteration = 0
+    episode = 0
     total_time = 0
     total_frames_collected = 0
 
@@ -534,12 +524,12 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
         training_tds = torch.stack(training_tds)
 
         # run evaluation every n episodes
-        if (log_iteration > 0 and ((log_iteration % config.evaluation_interval == 0) or (log_iteration + 1 == config.n_iters))):
-            evaluate_agents(config, policy, logger, log_iteration, agent_key, device, asymmetries)
+        if (log_iteration > 0 and ((log_iteration % config.evaluation_interval == 0) or (episode + 1 == config.n_iters))):
+            evaluate_agents(config, policy, logger, log_iteration, agent_key, device, asymmetries.to_env_kwargs())
 
         # save checkpointed policy every n episodes
-        if (log_iteration > 0 and save_policies and ((log_iteration % config.checkpoint_interval == 0) or (log_iteration + 1 == config.n_iters))):
-            save_checkpoint(policy, log_iteration, critic, optim, timestamp, local, seed)
+        if (log_iteration > 0 and save_policies and ((log_iteration % config.checkpoint_interval == 0) or (episode + 1 == config.n_iters))):
+            save_checkpoint(config, policy, log_iteration, critic, optim, timestamp, local, seed)
 
         training_time = iteration_end_time - training_start_time
         iteration_time = iteration_end_time - iteration_start_time
@@ -565,19 +555,20 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
         log_iteration += 1
 
         # set AI opponent strength if we are using more than one increment
-        if ai_increments > 1 or asymmetries.get('ai_strength', 1.0) > 1:
-            cl_strength = get_opponent_strength(config, log_iteration, asymmetries, ai_increments)
+        if ai_increments > 1 or asymmetries.opponent.ai_strength > 1:
+            cl_strength = get_opponent_strength(config, episode, asymmetries, ai_increments)
 
             collector.env.scenario.ai_decision_strength = min(1.0, cl_strength)
             collector.env.scenario.ai_precision_strength = min(1.0, cl_strength)
 
             collector.env.scenario.max_speed = config.max_speed * cl_strength
             collector.env.scenario.u_multiplier = config.u_multiplier * cl_strength
+        episode += 1
 
     return policy
 
 
-def save_checkpoint(policy, checkpoint, critic, optim, timestamp, local, seed):
+def save_checkpoint(config, policy, checkpoint, critic, optim, timestamp, local, seed):
     """Saves the state dictionary of trained policy."""
     if local: checkpoint_path = f"./test_policies/{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
     else: checkpoint_path = f"./saved_policies/{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
@@ -599,31 +590,25 @@ if __name__ == "__main__":
     args = parse_args()
     config = MAPPOConfig()
     LOAD_POLICY = True
-    LOAD_2V1_POLICY = True
+    LOAD_2V1_POLICY = False
     SAVE_POLICY = False
-    USE_WANDB = False
+    USE_WANDB = True
     LOCAL = True
     AI_INCREMENTS = 3
-    GNN_COMMUNICATION = True
+    GNN_COMMUNICATION = False
 
-    asymmetries = {
-        # list if more than one blue agent (2v1) e.g. [False, True]
-        "mask_pitch_lhs": False,
-        "mask_pitch_rhs": [False, True],
-        "mask_pitch_bhs": False,
-        "mask_pitch_ths": False,
-        "mask_ball": False,
-        "mask_opponent": False,
-        "mask_ball_by_distance": False,
-        "mask_opponent_by_distance": False,
-        "mask_if_far": False,
+    asymmetries = AsymmetryConfig(
+        masks=ObservationMasks(
+            mask_pitch_rhs=[False, True],  # agent 0 sees rhs, agent 1 doesn't
+        ),
+        opponent=OpponentDifficulty(
+            ai_strength=1.5,
+            ai_decision_strength=1.0,
+            ai_precision_strength=1.0,
+        )
+    )
 
-        # opponent settings physically, decision and precision attributes
-        "ai_strength": 1.5, "ai_decision_strength": 1.0, "ai_precision_strength": 1.0,
-    }
-
-    if LOCAL:
-        # if running locally for testing
+    if LOCAL: # if running locally for testing
         config.n_iters = 100
         config.max_steps = 100
         config.frames_per_batch = 48000
@@ -631,14 +616,14 @@ if __name__ == "__main__":
         config.minibatch_size = 128
 
     if LOAD_POLICY:
-        load_checkpoint_path = [SAVED_POLICIES_2V1["baseline_vs_mask_rhs"]] # first policy e.g. SAVED_POLICIES["baseline"]
+        load_checkpoint_path = [SAVED_POLICIES["baseline"]] # first policy e.g. SAVED_POLICIES["baseline"]
         if config.b_agents > 1:
             load_checkpoint_path.append(SAVED_POLICIES["mask_rhs"]) # second policy if needed for multi-agent training
     else: load_checkpoint_path = None
 
     timestamp = args.timestamp if args.timestamp else datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     vmas_device, device = setup_environment(seed=args.seed)
-    env, agent_key = make_env(config, device, asymmetries, show_specs=False, show_keys=True)
+    env, agent_key = make_env(config, device, asymmetries.to_env_kwargs(), show_specs=False, show_keys=True)
     policy, critic = build_mappo_modules(env, config, device, agent_key, use_gnn=GNN_COMMUNICATION)
     
     trained_policy = train_mappo(
