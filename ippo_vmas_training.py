@@ -1,4 +1,5 @@
 import torch
+from torch import multiprocessing
 import os
 
 from tqdm import tqdm
@@ -6,10 +7,10 @@ import datetime
 import time
 import numpy as np
 from math import floor
+import wandb
 
 from tensordict.nn import set_composite_lp_aggregate, TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
-from torch import multiprocessing
 
 from torchrl.collectors import SyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
@@ -23,7 +24,6 @@ from torchrl.envs.utils import check_env_specs, ExplorationType, set_exploration
 from torchrl.modules import MultiAgentMLP, ProbabilisticActor, TanhNormal
 from torchrl.objectives import ClipPPOLoss, ValueEstimators
 from torchrl.record.loggers.wandb import WandbLogger
-import wandb
 
 from football_design import FootballDesign
 from utils import standardize, check_loss_values, ClipModule, SAVED_POLICIES, SAVED_POLICIES_2V1, parse_args
@@ -34,18 +34,18 @@ from asymmetries import AsymmetryConfig, ObservationMasks, OpponentDifficulty
 os.environ["PYGLET_HEADLESS"] = "true"
 
 
-class MAPPOConfig:
+class IPPOConfig:
     # Environment
     max_steps = 500 # max no. timesteps per episode (def. 500)
     scenario_name = "football"
     scenario = FootballDesign
-    b_agents = 1
+    b_agents = 2
     r_agents = 1
     n_agents = b_agents + r_agents
     observe_teammates = False
 
     # Model
-    mappo = True
+    ippo = True
     share_parameters_policy = b_agents == 1 # true if just 1v1 play, otherwise don't share params
     share_parameters_critic = b_agents == 1 # true if just 1v1 play, otherwse don't share params
     num_cells = 256 # size of each layer in nn
@@ -129,48 +129,45 @@ def make_env(config, vmas_device, asymmetries, show_specs, show_keys):
     return env, agent_key
 
 
-def build_mappo_modules(env, config, device, agent_key, use_gnn):
-    """Creates and returns policy and critic modules based on config (MAPPO)."""
+def build_ippo_modules(env, config, device, agent_key):
+    """Creates and returns policy and critic modules based on config (IPPO)."""
     n_actions_per_agent = env.full_action_spec[env.action_key].shape[-1]
     n_obs_per_agent = env.observation_spec[agent_key, "observation"].shape[-1]
 
-    # setup policy network depending on whether to use a GNN to allow for communication when there is more than one agent
-    if config.b_agents > 1 and use_gnn:
-        policy_net = torch.nn.Sequential(
-            GNNCommunicationLayer(n_obs_per_agent, config.num_cells, env.n_agents).to(device),
-            MultiAgentMLP(
-                n_agent_inputs=config.num_cells,
-                n_agent_outputs=2 * n_actions_per_agent,
-                n_agents=env.n_agents,
-                centralised=False,
-                share_params=config.share_parameters_policy,
-                device=device,
-                depth=config.depth - 1, # adjust since GNN is already one layer
-                num_cells=config.num_cells,
-                activation_class=torch.nn.Tanh,
-            ),
-            ClipModule(-5, 5),
-            NormalParamExtractor("biased_softplus_1.0"),
-        )
-    else:
-        policy_net = torch.nn.Sequential(
-            MultiAgentMLP(
-                n_agent_inputs=n_obs_per_agent,
-                n_agent_outputs=2 * n_actions_per_agent,
-                n_agents=env.n_agents,
-                centralised=False,
-                share_params=config.share_parameters_policy,
-                device=device,
-                depth=config.depth,
-                num_cells=config.num_cells,
-                activation_class=torch.nn.Tanh,
-            ),
-            ClipModule(-5, 5),
-            NormalParamExtractor("biased_softplus_1.0"),
-        )
+    policy_mlp = MultiAgentMLP(
+        n_agent_inputs=n_obs_per_agent,
+        n_agent_outputs=2 * n_actions_per_agent,
+        n_agents=env.n_agents,
+        centralised=False, # independent
+        share_params=config.share_parameters_policy,
+        device=device,
+        depth=config.depth,
+        num_cells=config.num_cells,
+        activation_class=torch.nn.Tanh,
+    )
+
+    policy_net = torch.nn.Sequential(
+        policy_mlp,
+        ClipModule(-5, 5),
+        NormalParamExtractor(), 
+    )
+
+    critic_net = MultiAgentMLP(
+        n_agent_inputs=n_obs_per_agent,
+        n_agent_outputs=1,
+        n_agents=env.n_agents,
+        centralised=False,
+        share_params=config.share_parameters_critic,
+        device=device,
+        depth=config.depth,
+        num_cells=config.num_cells,
+        activation_class=torch.nn.Tanh,
+    )
 
     policy_module = TensorDictModule(
-        policy_net, in_keys=[(agent_key, "observation")], out_keys=[(agent_key, "loc"), (agent_key, "scale")],
+        policy_net, 
+        in_keys=[(agent_key, "observation")], 
+        out_keys=[(agent_key, "loc"), (agent_key, "scale")],
     )
 
     policy = ProbabilisticActor(
@@ -186,25 +183,35 @@ def build_mappo_modules(env, config, device, agent_key, use_gnn):
         return_log_prob=True,
     )
 
-    critic_net = MultiAgentMLP(
-        n_agent_inputs=env.observation_spec[agent_key, "observation"].shape[-1],
-        n_agent_outputs=1,
-        n_agents=env.n_agents,
-        centralised=config.mappo,
-        share_params=config.share_parameters_critic,
-        device=device,
-        depth=config.depth,
-        num_cells=config.num_cells,
-        activation_class=torch.nn.Tanh,
-    )
-
-    critic = TensorDictModule(
-        module=critic_net,
+    critic_module = TensorDictModule(
+        critic_net,
         in_keys=[(agent_key, "observation")],
         out_keys=[(agent_key, "state_value")],
     )
 
-    return policy, critic
+    return policy, critic_module
+
+
+def create_ippo_loss(config, env, policy, critic, agent_key):
+    """The loss logic for IPPO, but the value estimator now operates on local agent states."""
+    loss_module = ClipPPOLoss(
+        actor_network=policy,
+        critic_network=critic,
+        clip_epsilon=config.clip_epsilon,
+        entropy_coeff=config.entropy_eps,
+        normalize_advantage=False,
+    )
+    
+    loss_module.set_keys(
+        reward=env.reward_key,
+        action=env.action_key,
+        value=(agent_key, "state_value"),
+        done=(agent_key, "done"),
+        terminated=(agent_key, "terminated"),
+    )
+    loss_module.make_value_estimator(ValueEstimators.GAE, gamma=config.gamma, lmbda=config.lmbda)
+
+    return loss_module
 
 
 def create_buffer(config, device):
@@ -232,27 +239,6 @@ def create_collector(config, env, policy, vmas_device, device, total_frames):
     return collector
 
 
-def create_loss(config, env, policy, critic, agent_key):
-    """Creates loss modules."""
-    loss_module = ClipPPOLoss(
-        actor_network=policy,
-        critic_network=critic,
-        clip_epsilon=config.clip_epsilon,
-        entropy_coeff=config.entropy_eps,
-        normalize_advantage=False,
-    )
-    loss_module.set_keys( 
-        reward=env.reward_key,
-        action=env.action_key,
-        value=(agent_key, "state_value"),
-        done=(agent_key, "done"),
-        terminated=(agent_key, "terminated"),
-    )
-    loss_module.make_value_estimator(ValueEstimators.GAE, gamma=config.gamma, lmbda=config.lmbda)
-
-    return loss_module
-
-
 def setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries):
     """Setup tqdm logger and WanDB logger if used."""
     group = asymmetries.label()
@@ -260,7 +246,7 @@ def setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries):
     exp_name = f"{timestamp}_{group}_s{seed}"
 
     if use_wandb:
-        project = "fb_mappo_tests" if local else "torchrl_mappo_vmas"
+        project = "fb_ippo_tests" if local else "torchrl_ippo_vmas"
         logger = WandbLogger(exp_name=exp_name, project=project, log_dir="./wandb_logs", group=group_name)
     else: logger = DummyLogger()
 
@@ -269,7 +255,7 @@ def setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries):
     return logger, pbar
 
 
-def rendering_callback(env):
+def rendering_callback(env, td):
     env.frames.append(env.render(mode="rgb_array", visualize_when_rgb=False))
 
 
@@ -420,47 +406,42 @@ def get_checkpoints(config, policy, critic, optim, device, load_checkpoint_path,
 
         for i in range(config.b_agents):
             checkpoint = torch.load(load_checkpoint_path[i], map_location=device)
-            state_dict = checkpoint['policy_state_dict']
-            critic_dict = checkpoint['critic_state_dict']
+            p_state = checkpoint['policy_state_dict']
+            c_state = checkpoint['critic_state_dict']
             # checkpoint policy and critic weights [256, 24]
 
-            # copying policies into the correct dimensions of the network, critic is shared
-            for key, value in state_dict.items():
-                if key in new_policy_dict and isinstance(value, torch.Tensor):
-                    new_policy_dict[key][i].copy_(value)
+            # load policy weights for agent i
+            for key, value in p_state.items():
+                if key in new_policy_dict:
+                    target_param = new_policy_dict[key]
+                    if isinstance(target_param, torch.Tensor): # MultiAgentMLP with share_params=False has an agent dimension at index 0
+                        if target_param.ndim > value.ndim: target_param[i].copy_(value)
+                        else: target_param.copy_(value)
             
-            if i == 0:
-                for key, value in critic_dict.items():
-                    if key in new_critic_dict and isinstance(value, torch.Tensor):
-                        # the last dimension between new and loaded critic does not match so have to padd with 0s
-                        if value.ndim == 2 and value.shape[-1] != new_critic_dict[key].shape[-1]:
-                            last_dim = value.shape[-1]
-                            new_critic_dict[key][0][:, :last_dim].copy_(value)
-                            new_critic_dict[key][1][:, :last_dim].copy_(value)
-                        else:
-                            # for biases or hidden layers where dimensions match, might still have the [2, ...] agent dimension
-                            if new_critic_dict[key].ndim > value.ndim:
-                                new_critic_dict[key][0].copy_(value)
-                                new_critic_dict[key][1].copy_(value)
-                            else: new_critic_dict[key].copy_(value)
-
+            # load critic weights for agent i
+            for key, value in c_state.items():
+                if key in new_critic_dict:
+                    target_param = new_critic_dict[key]
+                    if isinstance(target_param, torch.Tensor):
+                        if target_param.ndim > value.ndim: target_param[i].copy_(value)
+                        else: target_param.copy_(value)
+            
         policy.load_state_dict(new_policy_dict)
         critic.load_state_dict(new_critic_dict)
         log_iteration, total_frames_collected = 0, 0
 
-    # to test returning log iteration and total frames colelcted as 0
     print(f"Loaded {len(load_checkpoint_path)} distinct policies into the team.")
     return log_iteration, total_frames_collected
 
 
-def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path, load_2v1_policy):
-    """Main MAPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
+def train_ippo(timestamp, seed, config, env, policy, critic, agent_key, device, vmas_device, use_wandb, save_policies, asymmetries, local, ai_increments, load_checkpoint_path, load_2v1_policy):
+    """Main IPPO algorithm training loop with evaluation and logging of metrics, returning the learnt policy for the agent."""
     total_frames = config.frames_per_batch * config.n_iters
     num_inner_iters = config.frames_per_batch // config.minibatch_size
 
     collector = create_collector(config, env, policy, vmas_device, device, total_frames)
     replay_buffer = create_buffer(config, device)
-    loss_module = create_loss(config, env, policy, critic, agent_key)
+    loss_module = create_ippo_loss(config, env, policy, critic, agent_key)
     optim = torch.optim.Adam(loss_module.parameters(), config.lr)
     logger, pbar = setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries)
 
@@ -489,7 +470,7 @@ def train_mappo(timestamp, seed, config, env, policy, critic, agent_key, device,
             advantage = tensordict_data.get(loss_module.tensor_keys.advantage)
 
             if config.normalize_advantage and advantage.numel() > 1:
-                advantage = standardize(advantage, exclude_dims=[-2])
+                advantage = standardize(advantage, exclude_dims=[0])
                 tensordict_data.set(loss_module.tensor_keys.advantage, advantage)
 
         # update replay buffer
@@ -585,13 +566,13 @@ def save_checkpoint(config, policy, checkpoint, critic, optim, timestamp, local,
 
 if __name__ == "__main__":
     args = parse_args()
-    config = MAPPOConfig()
+    config = IPPOConfig()
     LOAD_POLICY = True
     LOAD_2V1_POLICY = False
     SAVE_POLICY = False
     USE_WANDB = True
     LOCAL = True
-    AI_INCREMENTS = 3
+    AI_INCREMENTS = 1
     GNN_COMMUNICATION = False
 
     asymmetries = AsymmetryConfig(
@@ -621,9 +602,9 @@ if __name__ == "__main__":
     timestamp = args.timestamp if args.timestamp else datetime.datetime.now().strftime("%d%m%y_%H%M%S")
     vmas_device, device = setup_environment(seed=args.seed)
     env, agent_key = make_env(config, device, asymmetries.to_env_kwargs(), show_specs=False, show_keys=True)
-    policy, critic = build_mappo_modules(env, config, device, agent_key, use_gnn=GNN_COMMUNICATION)
+    policy, critic = build_ippo_modules(env, config, device, agent_key)
     
-    trained_policy = train_mappo(
+    trained_policy = train_ippo(
         timestamp=timestamp,
         seed=args.seed,
         config=config,
