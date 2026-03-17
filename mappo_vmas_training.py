@@ -269,7 +269,7 @@ def setup_loggers(config, use_wandb, timestamp, local, seed, asymmetries):
     return logger, pbar
 
 
-def rendering_callback(env):
+def rendering_callback(env, td):
     env.frames.append(env.render(mode="rgb_array", visualize_when_rgb=False))
 
 
