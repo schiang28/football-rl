@@ -548,8 +548,8 @@ def train_ippo(timestamp, seed, config, env, policy, critic, agent_key, device, 
 
 def save_checkpoint(config, policy, checkpoint, critic, optim, timestamp, local, seed):
     """Saves the state dictionary of trained policy."""
-    if local: checkpoint_path = f"./test_policies/{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
-    else: checkpoint_path = f"./saved_policies/{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
+    if local: checkpoint_path = f"./test_policies/ippo_{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
+    else: checkpoint_path = f"./saved_policies/ippo_{config.scenario_name}_{timestamp}/iter_{checkpoint}_s{seed}pol.pt"
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
     state = {

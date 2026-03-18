@@ -93,24 +93,50 @@ def calculate_snd(policy_a, policy_b, states, agent_key):
     return kl_ab.mean().item(), kl_ba.mean().item(), kl
 
 
+def calculate_snd_wasserstein(policy_a, policy_b, states, agent_key):
+    """Calculates SND via 2-Wasserstein Distance for Gaussian policies."""
+    with torch.no_grad():
+        td_a = policy_a(states)
+        mu_a = td_a[agent_key, "loc"] # mean [Samples, Agents, Action_dim]
+        std_a = td_a[agent_key, "scale"]
+
+        td_b = policy_b(states)
+        mu_b = td_b[agent_key, "loc"]
+        std_b = td_b[agent_key, "scale"]
+
+        mu_a, std_a = mu_a[:, 0, :], std_a[:, 0, :]
+        mu_b, std_b = mu_b[:, 0, :], std_b[:, 0, :]
+
+        # 2-Wasserstein Distance for Diagonal Gaussians
+        # W^2 = ||mu_a - mu_b||^2 + ||std_a - std_b||^2
+        mean_diff = torch.sum((mu_a - mu_b) ** 2, dim=-1)
+        std_diff = torch.sum((std_a - std_b) ** 2, dim=-1)
+        
+        wasserstein_sq = mean_diff + std_diff
+        wasserstein_dist = torch.sqrt(wasserstein_sq + 1e-8) # numerical stability with error
+
+        snd_val = wasserstein_dist.mean().item()
+
+    return snd_val
+
+
 def eval_conjecture_one(env, policy_a_name, policy_b_name, policy_a, policy_b, agent_key, save_plot):
     """Evaluation and evidence for conjecture 1. Calculate SND scores and cluster latent representions by calling plotting tsne code."""
-    # TODO: change metric to wasserstein distance so it's consistent despite order
-    env.set_seed(1)
+    plot_clusters = False
+    env.set_seed(0)
     test_td = env.rollout(max_steps=100)
     test_td = test_td.reshape(-1)
     print("GENERATED ROLLOUT SAMPLES.")
 
-    snd_ab, snd_ba, snd_val = calculate_snd(policy_a, policy_b, test_td, agent_key)
-    latents_a = get_latent_features(policy_a, test_td, agent_key)
-    latents_b = get_latent_features(policy_b, test_td, agent_key)
+    snd_val = calculate_snd_wasserstein(policy_a, policy_b, test_td, agent_key)
+    print(f"Symmetric System Neural Diversity (SND) between A ({policy_a_name}) and B ({policy_b_name}): {snd_val:.4f}")
 
-    print(f"KL divergence AB: {snd_ab}")
-    print(f"KL divergence BA: {snd_ba}")
-    print(f"Symmetric System Neural Diversity (SND) between A ({policy_a_name}) and B ({policy_b_name}): {snd_val}")
+    if plot_tsne_clusters:
+        print("PLOTTING TSNE CLUSTERS.")
+        latents_a = get_latent_features(policy_a, test_td, agent_key)
+        latents_b = get_latent_features(policy_b, test_td, agent_key)
+        plot_tsne_clusters(latents_a, latents_b, save_plot, policy_a_name, policy_b_name)
 
-    print("PLOTTING TSNE CLUSTERS.")
-    plot_tsne_clusters(latents_a, latents_b, save_plot, policy_a_name, policy_b_name)
     return snd_val
 
 
@@ -230,14 +256,16 @@ if __name__ == "__main__":
 
     if EVAL_CONJECTURE_1:
         policy_dict = SAVED_POLICIES
+        a_gnn, b_gnn = False, False
         config.b_agents = 1
     else:
         config.b_agents = 2
+        a_gnn, b_gnn = False, True
         policy_dict = SAVED_POLICIES_2V1
 
-    policy_a_name, policy_b_name = "baseline_vs_mask_rhs", "baseline_vs_mask_rhs"
+    policy_a_name, policy_b_name = "baseline", "baseline_vs_mask_rhs_mappo"
     checkpoint_path_a, checkpoint_path_b = policy_dict[policy_a_name], policy_dict[policy_b_name]
-    env, policy_a, policy_b, critic_a, critic_b, agent_key, device = setup_and_get_policies(config, checkpoint_path_a, checkpoint_path_b, a_gnn=True, b_gnn=True)
+    env, policy_a, policy_b, critic_a, critic_b, agent_key, device = setup_and_get_policies(config, checkpoint_path_a, checkpoint_path_b, a_gnn, b_gnn)
 
     # comparing system neural diversity (SND) and KL divergence between baseline and specialised policies
     if EVAL_CONJECTURE_1:

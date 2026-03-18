@@ -24,8 +24,15 @@ SAVED_POLICIES = {
 
 
 SAVED_POLICIES_2V1 = {
-    "baseline": "./saved_policies/mappo_football_161225_213559/iteration_450_policy.pt",
-    "baseline_vs_mask_rhs": "./saved_policies/mappo_football_030226_090456/iteration_3600_policy.pt"
+    #"baseline": "./saved_policies/mappo_football_161225_213559/iteration_450_policy.pt",
+    "baseline": "./saved_policies/mappo_football_030226_084116/iteration_500_policy.pt",
+    "baseline_vs_mask_rhs_mappo": "./saved_policies/mappo_football_030226_090456/iteration_3600_policy.pt",
+    "mask_ths_vs_mask_bhs_ippo_s1": ".saved_policies/football_J25292679/iter_499_s1pol.pt",
+    "mask_ths_vs_mask_bhs_ippo_s2": ".saved_policies/football_J25292679/iter_499_s2pol.pt",
+    "mask_ths_vs_mask_bhs_ippo_s3": ".saved_policies/football_J25292679/iter_499_s3pol.pt",
+    "baseline_vs_mask_rhs_ippo_s1": "saved_policies/football_J25291113/iter_499_s1pol.pt",
+    "baseline_vs_mask_rhs_ippo_s2": "saved_policies/football_J25291113/iter_499_s2pol.pt",
+    "baseline_vs_mask_rhs_ippo_s3": "saved_policies/football_J25291113/iter_499_s3pol.pt",
 }
 
 class ClipModule(torch.nn.Module):
